@@ -293,7 +293,9 @@ def measure(endpoint: str, model: str, api_key: str | None = None, *, use_cache:
 
 
 def fmt_min(m: float) -> str:
-    m = max(0, round(m))
+    if m < 1:
+        return "<1 min"
+    m = round(m)
     return f"{m // 60}h{m % 60:02d}" if m >= 60 else f"{m} min"
 
 
