@@ -8,6 +8,8 @@ It runs a fixed, pinned suite: the same items, the same token windows, greedy de
 way two runs compare item by item, and the comparison gives paired deltas with intervals, not two headline
 numbers side by side.
 
+![QualityBench: a quick run, the HTML report, and compare](docs/media/qualitybench.gif)
+
 | Task | Items | Scored as |
 |---|---|---|
 | `gsm8k` | 1319 | last number in the reply, 0-shot chat (lm-eval) |
