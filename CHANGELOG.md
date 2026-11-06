@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-06)
 
 - **Time estimate before a run.** `run` measures the server for a few seconds after the warmup (16 parallel
   chats and one long prompt), scales the reference run's per-task times by the speed difference and prints an
