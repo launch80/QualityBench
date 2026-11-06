@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qualitybench"
+version = "0.1.0"
+description = "Repeatable quality baseline and quality-loss benchmark for OpenAI-compatible LLM endpoints"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Launch80" }]
+keywords = ["llm", "benchmark", "evaluation", "quantization", "kl-divergence", "vllm"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Environment :: Console",
+]
+# The core stays small: the eval harnesses (lm-eval, evalplus, BFCL, LiveCodeBench) have
+# conflicting pins, so `qualitybench setup` installs each into its own locked environment.
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "jsonschema>=4.21"]
+
+[project.urls]
+Homepage = "https://github.com/launch80/QualityBench"
+Issues = "https://github.com/launch80/QualityBench/issues"
+
+[project.scripts]
+qualitybench = "qualitybench.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qualitybench"]
+
+[tool.hatch.build.targets.sdist]
+include = ["qualitybench", "tests", "README.md", "LICENSE", "CHANGELOG.md", "docs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

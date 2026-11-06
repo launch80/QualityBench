@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root{
+  color-scheme:light;
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  --good:#0ca30c; --good-text:#006300; --warn:#fab219; --crit:#d03b3b; --neutral:#f0efec;
+  --chip:#eceae4;
+}
+@media (prefers-color-scheme:dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme:dark;
+    --page:#0d0d0d; --surface:#1a1a19; --ink:#f0efec; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --good-text:#0ca30c; --neutral:#383835; --chip:#262624;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --page:#0d0d0d; --surface:#1a1a19; --ink:#f0efec; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --good-text:#0ca30c; --neutral:#383835; --chip:#262624;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.layout{max-width:1380px;margin:0 auto;padding:28px 16px 64px;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:24px;align-items:start}
+main{min-width:0}
+aside.cta{position:sticky;top:24px;display:flex;flex-direction:column;gap:12px}
+.cta-card{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:16px}
+.cta-card h2{font-size:16px;margin:0 0 4px}
+.cta-card p{margin:0 0 12px;color:var(--ink2);font-size:13.5px}
+.cta-btn{display:block;text-align:center;text-decoration:none;font-weight:600;font-size:14px;border-radius:8px;padding:9px 12px}
+.cta-btn.primary{background:var(--ink);color:var(--surface)}
+.cta-btn.secondary{border:1px solid var(--axis);color:var(--ink)}
+.cta-btn:hover{opacity:.88}
+.cta-btn:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+.cta-small{color:var(--muted);font-size:12px;margin-top:2px}
+@media (max-width:1100px){.layout{grid-template-columns:1fr}aside.cta{position:static;flex-direction:row;flex-wrap:wrap}aside.cta .cta-card{flex:1 1 260px}}
+header{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+h1{font-size:26px;line-height:1.25;margin:0 0 6px;font-weight:650;letter-spacing:-.01em}
+h2{font-size:18px;margin:0 0 4px;font-weight:650}
+h3{font-size:14px;margin:18px 0 6px;font-weight:600;color:var(--ink2)}
+.sub{color:var(--ink2);margin:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.chip{background:var(--chip);color:var(--ink2);border-radius:999px;padding:2px 10px;font-size:12.5px}
+.chip.proto{color:var(--ink);font-weight:600}
+button.theme{background:var(--surface);color:var(--ink2);border:1px solid var(--ring);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;cursor:pointer}
+section{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:20px;margin-top:18px}
+.lede{color:var(--ink2);margin:2px 0 14px;max-width:72ch}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:18px}
+.tile{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:14px 16px}
+.tile .v{font-size:26px;font-weight:650;line-height:1.15}
+.tile .l{color:var(--ink2);font-size:13px}
+.tile .n{color:var(--muted);font-size:12px;margin-top:2px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--ink2);margin:0 0 6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.chart{width:100%;overflow:hidden}
+svg text{fill:var(--ink2);font:12px system-ui,-apple-system,"Segoe UI",sans-serif}
+svg .tick{fill:var(--muted);font-variant-numeric:tabular-nums}
+svg .lbl{fill:var(--ink)}
+svg .val{fill:var(--ink2);font-variant-numeric:tabular-nums}
+details{margin-top:10px}
+summary{cursor:pointer;color:var(--ink2);font-size:13px}
+table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--grid);vertical-align:top}
+th{color:var(--ink2);font-weight:600}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.status{display:inline-flex;gap:5px;align-items:center;font-weight:600;font-size:12.5px;white-space:nowrap}
+.status .dot{width:8px;height:8px;border-radius:50%}
+.pending{color:var(--muted)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media (max-width:760px){.grid2{grid-template-columns:1fr}}
+.arm{border:1px solid var(--ring);border-radius:10px;padding:14px 16px;margin-top:14px}
+.arm h3{margin:0 0 2px;color:var(--ink);font-size:15px}
+.card{border:1px dashed var(--axis);border-radius:10px;padding:12px 14px}
+.card h4{margin:0 0 4px;font-size:14px}
+.card p{margin:0;color:var(--ink2);font-size:13px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:13px}
+.kv div:nth-child(odd){color:var(--ink2)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+ul.notes{margin:6px 0 0;padding-left:18px;color:var(--ink2)} ul.notes li{margin:3px 0}
+#tip{position:fixed;pointer-events:none;z-index:9;background:var(--surface);color:var(--ink);border:1px solid var(--ring);
+  border-radius:8px;padding:7px 10px;font-size:12.5px;box-shadow:0 4px 14px rgba(0,0,0,.14);display:none;max-width:280px}
+#tip b{font-weight:600}
+footer{color:var(--muted);font-size:12.5px;margin-top:22px}
+</style>
+</head>
+<body>
+<div id="tip"></div>
+<div class="layout">
+<main>
+  <header>
+    <div>
+      <h1 id="title"></h1>
+      <p class="sub" id="subtitle"></p>
+      <div class="chips" id="chips"></div>
+    </div>
+    <button class="theme" id="theme" type="button">Theme: auto</button>
+  </header>
+  <div class="tiles" id="tiles"></div>
+
+  <section id="s-tasks">
+    <h2>Task accuracy</h2>
+    <p class="lede">Greedy, temperature 0, same items for every run. Bars show accuracy and whiskers the 95% Wilson interval.
+      Thinking off is the gated reference; thinking on is exploratory.</p>
+    <div class="legend"><span><i style="background:var(--s1)"></i>Thinking off (reference)</span><span><i style="background:var(--s2)"></i>Thinking on</span></div>
+    <div class="chart" id="c-tasks"></div>
+    <details><summary>Table view</summary><div id="t-tasks"></div></details>
+  </section>
+
+  <section id="s-think">
+    <h2>Thinking on vs off, paired</h2>
+    <p class="lede">Each item is answered both ways, so the comparison is paired: the dot is the accuracy change, the line its
+      95% bootstrap interval (10,000 resamples, seed 608). An interval that crosses zero is not a measurable difference.</p>
+    <div class="grid2">
+      <div><h3>Accuracy change (points)</h3><div class="chart" id="c-delta"></div></div>
+      <div><h3>Items that changed outcome</h3>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Right only with thinking off</span><span><i style="background:var(--s2)"></i>Right only with thinking on</span></div>
+        <div class="chart" id="c-disc"></div></div>
+    </div>
+    <details><summary>Table view</summary><div id="t-think"></div></details>
+  </section>
+
+  <section id="s-lp">
+    <h2>Next-token reference (logprobs)</h2>
+    <p class="lede">Teacher-forced over fixed 2048-token windows, top-64 logprobs kept per position. These files are the
+      reference every quantized arm is scored against (KLD, top-1 agreement, perplexity change).</p>
+    <div class="grid2">
+      <div><h3>Mean loss by position in the window (nats)</h3>
+        <div class="legend" id="lg-pos"></div><div class="chart" id="c-pos"></div></div>
+      <div><h3>Perplexity per window</h3><div class="chart" id="c-win"></div></div>
+    </div>
+    <details><summary>Table view</summary><div id="t-lp"></div></details>
+  </section>
+
+  <section id="s-needle">
+    <h2>Long-context retrieval (needle)</h2>
+    <p class="lede">A 7-digit number hidden at 10 depths in C4 text, retrieved with greedy decoding.</p>
+    <div class="chart" id="c-needle"></div>
+    <details><summary>Table view</summary><div id="t-needle"></div></details>
+  </section>
+
+  <section id="s-thr">
+    <h2>Thresholds</h2>
+    <p class="lede" id="thr-lede"></p>
+    <div id="t-thr"></div>
+  </section>
+
+  <section id="s-compare">
+    <h2>Compared runs vs this reference</h2>
+    <p class="lede" id="arms-lede"></p>
+    <div id="arms"></div>
+  </section>
+
+  <section id="s-notes">
+    <h2>Caveats</h2>
+    <ul class="notes" id="notes"></ul>
+  </section>
+
+  <section id="s-repro">
+    <h2>Reproduce</h2>
+    <div class="kv" id="kv-env"></div>
+    <h3>Hashes</h3>
+    <div class="kv" id="kv-hash"></div>
+  </section>
+  <footer id="foot"></footer>
+</main>
+<aside class="cta" aria-label="Launch80 community">
+  <div class="cta-card">
+    <h2>Join the Launch80 Discord</h2>
+    <p>Questions about these results, a model you want tested, or your own runs to compare.</p>
+    <a class="cta-btn primary" href="https://discord.gg/launch80" target="_blank" rel="noopener">Join the Discord</a>
+    <div class="cta-small">discord.gg/launch80</div>
+  </div>
+  <div class="cta-card">
+    <h2>Support Launch80</h2>
+    <p>Benchmarks like this run on community-funded hardware and rented GPUs. Supporters keep the server going.</p>
+    <a class="cta-btn secondary" href="https://launch80.com/supporter" target="_blank" rel="noopener">Become a supporter</a>
+    <div class="cta-small">launch80.com/supporter</div>
+  </div>
+</aside>
+</div>
+<script>
+/*__SCRIPT__*/
+</script>
+</body>
+</html>

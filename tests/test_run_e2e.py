@@ -1,0 +1,178 @@
+"""The run loop end to end against a fake server: native tasks, resume, deadline, compare, schema, proxy."""
+import hashlib
+import json
+import time
+from pathlib import Path
+
+import jsonschema
+import pytest
+
+from qualitybench import http as qhttp
+from qualitybench.cli import main
+from qualitybench.proxy import Proxy
+from qualitybench.tasks.native import inputs_dir
+
+from fakeserver import Fake
+
+SCHEMA = json.loads((Path(__file__).parent / "schema" / "bench-qualitybench-v1.json").read_text())
+
+
+def publishable(doc):
+    """What L80 sends: the results minus env.endpoint/env.host, plus $template."""
+    d = json.loads(json.dumps(doc))
+    d["env"].pop("endpoint", None)
+    d["env"].pop("host", None)
+    d["$template"] = "bench.qualitybench.v1"
+    jsonschema.Draft202012Validator(SCHEMA).validate(d)
+    return d
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    h = tmp_path / "qbhome"
+    monkeypatch.setenv("QUALITYBENCH_HOME", str(h))
+    qhttp.CANCEL.clear()
+    # fixed inputs for the fake tokenizer "tok": a small eval set and needle prompts
+    sets = {"ppl-wiki": [[(i * 7 + j) % 1000 for j in range(64)] for i in range(4)],
+            "ppl-code": [[(i * 11 + j) % 1000 for j in range(64)] for i in range(4)],
+            "kld": [[(i * 13 + j) % 1000 for j in range(64)] for i in range(12)]}
+    es = dict(sets, meta={"sha256_ids": hashlib.sha256(json.dumps(sets).encode()).hexdigest(), "vocab": 1000})
+    d = inputs_dir("tok")
+    d.mkdir(parents=True)
+    (d / "eval-set.json").write_text(json.dumps(es))
+    prompts = [{"length": L, "depth": round(k / 9, 3), "number": str(1000000 + 10 * k + L // 1024),
+                "prompt": ("hay " * (L // 4)) + f"The magic number for the blue lighthouse is {1000000 + 10 * k + L // 1024}."}
+               for L in (32768, 131072) for k in range(10)]
+    (d / "needle.json").write_text(json.dumps({"prompts": prompts}))
+    return h
+
+
+def run(fake, out, *extra):
+    return main(["run", "--endpoint", fake.url, "--model", "fake", "--out", str(out), "--tokenizer", "tok",
+                 "--tasks", "logprobs,needle,spec_parity", "--skip-setup", "--concurrency", "4", *extra])
+
+
+def test_run_writes_valid_results_and_resumes(home, tmp_path, capsys):
+    fake = Fake()
+    try:
+        out = tmp_path / "ref.json"
+        assert run(fake, out, "--note", "precision=BF16", "--note", "made in a test") == 0
+        o = capsys.readouterr().out
+        assert 'qb:progress {"task":"logprobs","done":0,"total":20}' in o
+        assert '"state":"scored"' in o
+        doc = json.loads(out.read_text())
+        assert doc["schema_version"] == 1 and doc["model"] == "fake"
+        assert set(doc["logprobs"]) == {"ppl-wiki", "ppl-code", "kld"}
+        assert doc["env"]["precision"] == "BF16" and "Note: made in a test" in doc["caveats"]
+        # 128k needles exceed the fake's context: skipped and listed, never silently dropped
+        assert {i["length"] for i in doc["needle"]["items"]} == {32768}
+        assert any("128k" in p for p in doc["partials"])
+        assert (tmp_path / "ref.html").is_file() and (tmp_path / "ref.qb" / "parity.json").is_file()
+        # the first request is the warmup/preflight, never part of a task
+        first = [r for r in fake.requests if r[0] == "POST"][0]
+        assert "single word OK" in first[2]["messages"][0]["content"]
+        assert doc["tasks"] == []  # no scored task in this run, so launch80 would refuse it: say so, don't fake it
+        n = len(fake.requests)
+        assert run(fake, out) == 0  # resume: logprobs and parity are not asked again
+        again = [r for r in fake.requests[n:] if r[1].endswith("/v1/completions") and "prompt" in (r[2] or {})]
+        assert again == []
+    finally:
+        fake.close()
+
+
+def test_compare_and_schema(home, tmp_path, capsys):
+    ref, test = Fake(), Fake(noise=0.05)
+    try:
+        assert run(ref, tmp_path / "ref.json") == 0
+        assert run(test, tmp_path / "test.json") == 0
+        # give both runs the same scored task so the doc is publishable, with one changed item
+        for name, flip in (("ref", False), ("test", True)):
+            (tmp_path / f"{name}.qb" / "items").mkdir(exist_ok=True)
+            items = [{"id": f"gsm8k/{i}", "correct": (i % 3 != 0) ^ (flip and i == 1)} for i in range(30)]
+            (tmp_path / f"{name}.qb" / "items" / "gsm8k.jsonl").write_text("\n".join(map(json.dumps, items)) + "\n")
+        assert main(["compare", str(tmp_path / "ref.json"), str(tmp_path / "test.json"), "--out", str(tmp_path / "cmp.json")]) == 0
+        cmp_doc = json.loads((tmp_path / "cmp.json").read_text())
+        arm = cmp_doc["arms"]["fake"]
+        assert arm["kld"]["mean"] > 0 and 0 <= arm["top1"]["agree"] <= 100
+        assert arm["spec_parity"]["identical"] is True
+        assert cmp_doc["gate_arm"] == "fake"
+        t3 = next(t for t in cmp_doc["thresholds"] if t["id"] == "T3")
+        assert "fake" in t3["results"]
+        # a results file built from the sidecar is valid under the server schema once it has a task
+        from qualitybench import results
+        doc = results.build(tmp_path / "ref.qb")
+        assert doc["tasks"][0]["id"] == "gsm8k"
+        publishable(doc)
+        cmp_doc["tasks"] = doc["tasks"]
+        publishable(cmp_doc)
+        assert (tmp_path / "cmp.html").is_file()
+    finally:
+        ref.close()
+        test.close()
+
+
+def test_reference_flag_writes_comparison_to_out(home, tmp_path):
+    ref, test = Fake(), Fake(noise=0.05)
+    try:
+        assert run(ref, tmp_path / "ref.json") == 0
+        assert run(test, tmp_path / "test.json", "--reference", str(tmp_path / "ref.json"), "--arm", "int4") == 0
+        doc = json.loads((tmp_path / "test.json").read_text())
+        assert "int4" in doc["arms"] and (tmp_path / "test.qb" / "run.json").is_file()
+    finally:
+        ref.close()
+        test.close()
+
+
+def test_deadline_marks_tasks_partial(home, tmp_path):
+    fake = Fake()
+    try:
+        assert run(fake, tmp_path / "r.json", "--deadline", "1ms") == 0
+        doc = json.loads((tmp_path / "r.json").read_text())
+        assert len(doc["partials"]) == 3 and all("deadline" in p for p in doc["partials"])
+    finally:
+        fake.close()
+
+
+def test_thinking_preflight(home, tmp_path):
+    fake = Fake(reasoning=False)
+    try:
+        assert run(fake, tmp_path / "r.json", "--thinking", "on") == 1
+        fake.reasoning = True
+        assert run(fake, tmp_path / "r.json", "--thinking", "on") == 0
+        chat = [r[2] for r in fake.requests if r[1].endswith("/chat/completions")]
+        assert all(b["chat_template_kwargs"]["enable_thinking"] is True for b in chat)
+        assert all(b["max_tokens"] >= 16384 for b in chat)
+    finally:
+        fake.close()
+
+
+def test_rerun_with_other_tier_is_refused(home, tmp_path):
+    fake = Fake()
+    try:
+        assert run(fake, tmp_path / "r.json") == 0
+        with pytest.raises(SystemExit):
+            run(fake, tmp_path / "r.json", "--quick")
+    finally:
+        fake.close()
+
+
+def test_proxy_adds_key_and_cancels_abandoned_requests(home, monkeypatch):
+    fake = Fake()
+    try:
+        with Proxy(fake.url, api_key="sekrit", thinking="off") as px:
+            c = qhttp.Client(px.url)
+            c.get("/v1/models")
+            assert fake.requests[-1][3].get("Authorization") == "Bearer sekrit"
+            r = c.chat("fake", [{"role": "user", "content": "hi"}], stop=["x"])
+            assert fake.requests[-1][2]["chat_template_kwargs"] == {"enable_thinking": False}
+            assert fake.requests[-1][2]["stop"] == ["x"]
+            # a client that gives up: the proxy must drop the upstream generation too
+            slow = qhttp.Client(px.url, timeout=0.5, attempts=1)
+            t0 = time.time()
+            with pytest.raises(Exception):
+                slow.chat("slow", [{"role": "user", "content": "x"}])
+            assert fake.aborted.wait(5), "the upstream request was not cancelled"
+            assert time.time() - t0 < 6
+            assert sum(1 for r in fake.requests if (r[2] or {}).get("model") == "slow") == 1  # never resent
+    finally:
+        fake.close()
