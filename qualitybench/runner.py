@@ -25,6 +25,9 @@ def preflight(ctx: Ctx, client: qhttp.Client) -> None:
     m = r["choices"][0]["message"]
     reasoning = m.get("reasoning") or m.get("reasoning_content")
     log_to(ctx, f"preflight content: {m.get('content')!r} reasoning: {'yes' if reasoning else 'no'}")
+    if ctx.thinking is None and reasoning:
+        raise TaskFailed("preflight: this model thinks by default, and the harnesses' token limits would cut its "
+                         "replies off mid-thought. Pass --thinking off (the usual baseline) or --thinking on")
     if not m.get("content"):
         raise TaskFailed("preflight: the model returned no content")
     if ctx.thinking == "off" and reasoning:

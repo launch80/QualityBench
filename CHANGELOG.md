@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2026-11-06)
+
+- Preflight: a model that thinks by default, run without `--thinking`, now stops at once and asks for
+  `--thinking off` (the usual baseline) or `--thinking on`. Before, it failed with "the model returned no
+  content", because the reasoning used up the preflight's tokens, and the harnesses' token limits would
+  have cut its replies off mid-thought anyway.
+- README: links to the intro video and the launch post.
+
 ## 0.1.0 (2026-11-06)
 
 First release. QualityBench is extracted from the kit that ran the Qwopus3.8-27B BF16-vs-INT4 study.

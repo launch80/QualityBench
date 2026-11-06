@@ -146,6 +146,15 @@ def test_thinking_preflight(home, tmp_path):
         fake.close()
 
 
+def test_default_thinking_model_is_told_to_pick(home, tmp_path, capsys):
+    fake = Fake(reasoning=True)
+    try:
+        assert run(fake, tmp_path / "d.json") == 1
+        assert "--thinking off" in (tmp_path / "d.qb" / "run.log").read_text()
+    finally:
+        fake.close()
+
+
 def test_rerun_with_other_tier_is_refused(home, tmp_path):
     fake = Fake()
     try:
