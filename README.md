@@ -1,5 +1,7 @@
 # QualityBench
 
+> **How to:** watch the [2-minute intro video](https://youtu.be/m7z_u1MZNiU) or read the [launch post](https://www.launch80.com/blog/qualitybench-launch) for a walkthrough of a run, the report and compare, with and without the L80 CLI.
+
 QualityBench measures how good a model's answers are, and how much quality a quantized build or a different
 engine loses, against any OpenAI-compatible endpoint. It is the quality sibling of
 [BetterBench](https://github.com/GGZ14/BetterBench), which measures speed.
