@@ -62,7 +62,9 @@ def uv() -> str:
 
 
 def _run(cmd: list, **kw) -> None:
-    log("$ " + " ".join(map(str, cmd)))
+    # An inline script logs as its first line only, so it doesn't fill the console.
+    shown = [a if "\n" not in a else a.strip().splitlines()[0] + " …" for a in map(str, cmd)]
+    log("$ " + " ".join(shown))
     subprocess.run(list(map(str, cmd)), check=True, **kw)
 
 
