@@ -70,6 +70,31 @@ Useful options:
 
 The endpoint's bearer key goes in `QUALITYBENCH_API_KEY`, never on the command line.
 
+### How long it will take
+
+These runs take a while: about 2h40 for the full suite on a 27B INT4 model on one Arc Pro B65. Before the
+first task, `run` measures the server for a few seconds and prints an estimate with a range:
+
+```
+Estimated time: about 38 min (17 min–1h16), measured on this server just now
+  GSM8K 6 min · IFEval 3 min · MMLU-Pro 9 min · HumanEval+ 4 min · ...
+Start? [y/N]
+```
+
+On a terminal it asks before starting. `--yes` skips the question, and `QUALITYBENCH_CONFIRM=never` (or
+`over:30m`, to ask only for long runs) changes the default. Scripts without a terminal are never asked.
+`--max-minutes 60` refuses to start (exit 3) when the run could take longer than that.
+
+To estimate without running anything:
+
+```bash
+qualitybench estimate --endpoint http://127.0.0.1:8000/v1 --model my-model --quick [--json]
+```
+
+The first estimate for a model is rough: the probe measures the server's speed, not how much this model
+writes. After one run, the estimate uses that run's real times, kept in `timings.jsonl` in the QualityBench
+home (`~/.cache/qualitybench`). That file stays on this machine.
+
 To resume an interrupted run, run the same command again. Finished tasks, evalplus shards, LCB problems and
 logprob chunks are kept and skipped.
 
@@ -118,9 +143,14 @@ While it runs, the tool prints one machine-readable line per update. [L80](https
 console reads these lines; any other line is log text.
 
 ```
-qb:progress {"task":"gsm8k","done":120,"total":1319}
-qb:progress {"task":"gsm8k","state":"scored","correct":1147,"total":1319}
+qb:estimate {"source":"probe","total_min":38.2,"range_min":[17.2,76.4],"tasks":[...],...}
+qb:progress {"task":"gsm8k","done":120,"total":1319,"elapsed_s":95}
+qb:progress {"task":"gsm8k","state":"scored","correct":1147,"total":1319,"elapsed_s":412}
+qb:progress {"run":{"task":"ifeval","task_index":2,"tasks":9,"elapsed_s":812,"eta_s":1460,"est_total_s":2300,"fraction":0.36}}
 ```
+
+The `run` line comes every 10 seconds and at each task change. L80 draws it as an overall bar with the time
+left.
 
 [docs/contract.md](docs/contract.md) is the full contract between QualityBench and L80: flags, exit codes,
 outputs and the results format.

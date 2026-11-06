@@ -121,9 +121,68 @@ def test_parity_compare():
 def test_cli_version_and_usage(capsys):
     with pytest.raises(SystemExit) as e:
         main(["--version"])
-    assert e.value.code == 0 and capsys.readouterr().out.strip() == "0.1.1"
+    assert e.value.code == 0 and capsys.readouterr().out.strip() == "0.2.0"
     with pytest.raises(SystemExit) as e:
         main(["run", "--endpoint", "x"])
     assert e.value.code == 2
     assert main(["run", "--endpoint", "x", "--model", "m", "--out", "o.json", "--deadline", "soon"]) == 2
     assert main(["tasks", "--json"]) == 0
+
+
+# --- estimate and progress ------------------------------------------------------------------------
+def test_estimate_scales_with_server_speed_and_history():
+    from qualitybench import estimate as e
+    ref = {"decode_tps": e.REF_DECODE_TPS, "prefill_tps": e.REF_PREFILL_TPS}
+    full = e.estimate(["gsm8k", "logprobs"], False, "off", "m", ref, history=[])
+    assert [r["min"] for r in full["tasks"]] == [19, 16] and full["source"] == "probe"
+    fast = e.estimate(["gsm8k"], False, "off", "m", {"decode_tps": e.REF_DECODE_TPS * 4, "prefill_tps": 1}, history=[])
+    ov = e.OVERHEAD_S["gsm8k"] / 60
+    assert abs(fast["tasks"][0]["min"] - (ov + (19 - ov) / 4)) < 0.1
+    think = e.estimate(["gsm8k"], False, "on", "m", ref, history=[])
+    assert think["tasks"][0]["min"] > 3 * full["tasks"][0]["min"]
+    nothing = e.estimate(["gsm8k"], True, None, "m", None, history=[])
+    assert nothing["source"] == "reference" and nothing["tasks"][0]["items"] == 132
+    # an earlier quick run of this model: scale its wall time to the full item count
+    o = e.OVERHEAD_S["gsm8k"]
+    hist = [{"tasks": {"gsm8k": {"items": 132, "wall_s": o + 66}}, "probe": None}]
+    h = e.estimate(["gsm8k", "ifeval"], False, "off", "m", None, history=hist)
+    assert h["tasks"][0]["source"] == "history" and abs(h["tasks"][0]["min"] - (o + 66 * 1319 / 132) / 60) < 0.1
+    assert h["source"] == "reference"  # ifeval had no history: the range says so
+
+
+def test_confirm_modes(monkeypatch):
+    from qualitybench import estimate as e
+    d = {"total_min": 20}
+    monkeypatch.delenv("QUALITYBENCH_CONFIRM", raising=False)
+    assert e.confirm_mode() == "always" and e.needs_confirm(d, "always")
+    assert not e.needs_confirm(d, "never")
+    assert not e.needs_confirm(d, "over:30m") and e.needs_confirm({"total_min": 45}, "over:30m")
+    assert e.needs_confirm({"total_min": 61}, "over:1h") and not e.needs_confirm(d, "over:25")
+    monkeypatch.setenv("QUALITYBENCH_CONFIRM", "bogus")
+    assert e.confirm_mode() == "always"
+
+
+def test_tracker_eta_converges():
+    from qualitybench.progress import Tracker
+    now = [0.0]
+    tr = Tracker({"a": 10, "b": 10}, ["a", "b"], clock=lambda: now[0])
+    tr.start("a")
+    assert tr.snapshot()["eta_s"] == 1200 and tr.snapshot()["fraction"] == 0
+    # task a actually runs at twice its estimate: 20 min
+    for minute in range(1, 21):
+        now[0] = minute * 60
+        tr.update("a", {"done": minute, "total": 20})
+        if minute == 10:
+            s = tr.snapshot()
+            # a: half generated in 10 min, so 10 more plus its scoring share; b still at its estimate
+            assert abs(s["eta_s"] - (733 + 600)) < 60
+    tr.end("a")
+    tr.start("b")
+    s = tr.snapshot()
+    assert abs(s["eta_s"] - 1200) < 60 and s["fraction"] == 0.5  # b corrected by a's 2x ratio
+    now[0] += 600
+    tr.update("b", {"done": 5, "total": 10})
+    assert abs(tr.snapshot()["eta_s"] - 733) < 60
+    tr.update("b", {"state": "scored"})
+    tr.end("b")
+    assert tr.snapshot()["eta_s"] == 0 and tr.snapshot()["fraction"] == 1.0

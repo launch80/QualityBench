@@ -58,7 +58,19 @@ def test_run_writes_valid_results_and_resumes(home, tmp_path, capsys):
         out = tmp_path / "ref.json"
         assert run(fake, out, "--note", "precision=BF16", "--note", "made in a test") == 0
         o = capsys.readouterr().out
-        assert 'qb:progress {"task":"logprobs","done":0,"total":20}' in o
+        assert 'qb:progress {"task":"logprobs","done":0,"total":20,"elapsed_s":' in o
+        # the estimate comes first, then run-level lines with the time left
+        est = json.loads(next(l for l in o.splitlines() if l.startswith("qb:estimate "))[12:])
+        assert est["source"] == "probe" and [t["id"] for t in est["tasks"]] == ["logprobs", "needle", "spec_parity"]
+        runs = [json.loads(l[12:])["run"] for l in o.splitlines() if l.startswith('qb:progress {"run"')]
+        assert runs and runs[-1]["task_index"] == 3 and runs[-1]["fraction"] == 1.0 and runs[-1]["eta_s"] == 0
+        assert o.index("qb:estimate ") < o.index('qb:progress {"task"')
+        env = json.loads((tmp_path / "ref.qb" / "ENV.json").read_text())
+        assert env["estimate"]["source"] == "probe" and "wall_min" in env
+        published = json.loads(out.read_text())["env"]
+        assert "estimate" not in published and "wall_min" not in published  # the schema has no room for them
+        hist = [json.loads(l) for l in (home / "timings.jsonl").read_text().splitlines()]
+        assert hist[-1]["model"] == "fake" and set(hist[-1]["tasks"]) == {"logprobs", "needle", "spec_parity"}
         assert '"state":"scored"' in o
         doc = json.loads(out.read_text())
         assert doc["schema_version"] == 1 and doc["model"] == "fake"
@@ -185,3 +197,54 @@ def test_proxy_adds_key_and_cancels_abandoned_requests(home, monkeypatch):
             assert sum(1 for r in fake.requests if (r[2] or {}).get("model") == "slow") == 1  # never resent
     finally:
         fake.close()
+
+
+def test_max_minutes_refuses_before_any_task(home, tmp_path, capsys):
+    fake = Fake()
+    try:
+        out = tmp_path / "r.json"
+        assert run(fake, out, "--max-minutes", "0.01") == 3
+        assert "not started" in capsys.readouterr().err
+        assert not any(r[1].endswith("/v1/completions") for r in fake.requests)  # no logprobs work began
+    finally:
+        fake.close()
+
+
+def test_tty_prompt_declined_and_accepted(home, tmp_path, monkeypatch, capsys):
+    import io
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    fake = Fake()
+    try:
+        monkeypatch.setattr("sys.stdin", TTY("n\n"))
+        assert run(fake, tmp_path / "a.json") == 0
+        assert "Start? [y/N]" in capsys.readouterr().err
+        assert not (tmp_path / "a.json").exists()
+        monkeypatch.setattr("sys.stdin", TTY("y\n"))
+        assert run(fake, tmp_path / "b.json") == 0 and (tmp_path / "b.json").is_file()
+        monkeypatch.setattr("sys.stdin", TTY(""))  # --yes never reads the terminal
+        assert run(fake, tmp_path / "c.json", "--yes") == 0 and (tmp_path / "c.json").is_file()
+        monkeypatch.setenv("QUALITYBENCH_CONFIRM", "never")
+        assert run(fake, tmp_path / "d.json") == 0 and (tmp_path / "d.json").is_file()
+    finally:
+        fake.close()
+
+
+def test_estimate_command(home, capsys):
+    fake = Fake()
+    try:
+        assert main(["estimate", "--endpoint", fake.url, "--model", "fake", "--quick", "--json"]) == 0
+        d = json.loads(capsys.readouterr().out)
+        assert d["source"] == "probe" and d["probe"]["decode_tps"] > 0 and d["range_min"][0] <= d["total_min"]
+        n = len(fake.requests)
+        assert main(["estimate", "--endpoint", fake.url, "--model", "fake", "--json"]) == 0
+        assert len(fake.requests) == n  # the probe is reused for 10 minutes
+        capsys.readouterr()
+    finally:
+        fake.close()
+    assert main(["estimate", "--endpoint", "http://127.0.0.1:9/v1", "--model", "other", "--json"]) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["source"] == "reference" and "could not measure" in d["warning"]

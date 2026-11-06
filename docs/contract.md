@@ -46,9 +46,43 @@ Flags L80 does not send by name, but may pass through: `--title`, `--concurrency
 - Environment: `QUALITYBENCH_API_KEY` is the endpoint's bearer key, which never
   arrives as a flag. `QUALITYBENCH_NO_UPDATE_CHECK=1` means L80 owns version alignment.
 
+- `--yes` starts without asking about the estimated time. Without it, a run on
+  a terminal asks `Start? [y/N]` (a "no" exits 0 and runs nothing);
+  `QUALITYBENCH_CONFIRM=always|never|over:<duration>` sets when to ask. A run
+  without a terminal never asks. L80 asks itself and passes `--yes`. (0.2.0)
+- `--max-minutes N` refuses to start, exit 3, when the estimate's upper bound
+  is over N minutes. `--no-probe` skips the server speed test. (0.2.0)
+
 Exit status: 0 when the results file is complete or partial by deadline; 1 when
 a task failed (the results file is still written, with the task in `partials`);
-2 on usage; 130 when interrupted. On any exit the tool keeps what it finished.
+2 on usage; 3 when `--max-minutes` stopped the run before it started; 130 when
+interrupted. On any exit the tool keeps what it finished.
+
+### `qualitybench estimate` (0.2.0)
+
+```
+qualitybench estimate --model M [--endpoint URL] [--quick] [--tasks a,b] [--thinking on|off] [--no-probe] [--json]
+```
+
+Runs nothing. With `--endpoint` it measures the server (16 parallel chats and
+one long prompt, a few seconds once the model is loaded; reused for 10
+minutes). With `--json` it prints one object:
+
+```json
+{"source": "probe", "total_min": 38.2, "range_min": [17.2, 76.4],
+ "tasks": [{"id": "gsm8k", "label": "GSM8K", "min": 6.1, "items": 132, "source": "probe"}],
+ "probe": {"decode_tps": 2140.0, "prefill_tps": 9800.0, "concurrency": 16, "speed": 9.2},
+ "setup_min": 0, "basis": "measured on this server just now"}
+```
+
+`source` is the weakest source any task used: `history` (earlier runs of this
+model with the same thinking setting, from `timings.jsonl` in the QualityBench
+home), `probe` or `reference` (the reference run's times, when the server
+can't be measured). If the server can't be reached it still exits 0, with
+source `reference` and a `warning`. `setup_min` is the one-time install still
+needed. `run` prints the same object as a `qb:estimate` line before the first
+task, and keeps it (with the run's `wall_min`) in `<name>.qb/ENV.json`. It is
+not part of the results file.
 
 ## Suite (v1)
 
@@ -131,6 +165,19 @@ qb:progress {"task":"gsm8k","done":120,"total":1319}
 qb:progress {"task":"gsm8k","state":"scored","correct":1147,"total":1319}
 qb:progress {"task":"lcb","state":"partial","done":88,"total":175}
 ```
+
+From 0.2.0, task lines carry `elapsed_s` (seconds since the task started), and
+a run line comes every 10 seconds and at each task change:
+
+```
+qb:progress {"run":{"task":"ifeval","task_index":2,"tasks":9,"elapsed_s":812,"eta_s":1460,"est_total_s":2300,"fraction":0.36}}
+```
+
+`task_index` is 1-based. `fraction` is the share of the run done, weighted by
+each task's estimated minutes. `eta_s` uses the running task's own rate once it
+is a few percent in, and the estimates of the tasks still to come, corrected by
+how the finished tasks compared with theirs. The `qb:estimate` line is
+described under `qualitybench estimate`.
 
 The console's QualityBench screen parses these for its per-task progress
 view. Any other output is shown as log text.

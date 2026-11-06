@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- **Time estimate before a run.** `run` measures the server for a few seconds after the warmup (16 parallel
+  chats and one long prompt), scales the reference run's per-task times by the speed difference and prints an
+  estimate with a range. After a run, it uses that model's real times from `timings.jsonl` in the QualityBench
+  home, which never leaves the machine.
+- **Approval.** On a terminal, `run` asks `Start? [y/N]` before the first task. `--yes` skips it,
+  `QUALITYBENCH_CONFIRM=never|over:30m` changes the default, and runs without a terminal are never asked.
+  `--max-minutes N` refuses runs that could take longer (exit 3). Harness setup now happens after the question.
+- **`qualitybench estimate`** prints the estimate without running anything, with `--json` for L80 and agents.
+- **Progress:** a `qb:estimate` line before the first task, `elapsed_s` on task lines, and a run line every
+  10 seconds with the overall fraction and time left (`eta_s`). L80 draws them as an overall bar.
+- The estimate and the run's wall time are kept in `<name>.qb/ENV.json`, not in the results file (the
+  `bench.qualitybench.v1` env has no room for them).
+
 ## 0.1.1 (2026-11-06)
 
 - Preflight: a model that thinks by default, run without `--thinking`, now stops at once and asks for

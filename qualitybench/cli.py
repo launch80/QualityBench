@@ -1,4 +1,4 @@
-"""Command line: `qualitybench run | compare | report | setup | tasks`."""
+"""Command line: `qualitybench run | estimate | compare | report | setup | tasks`."""
 from __future__ import annotations
 
 import argparse
@@ -49,7 +49,21 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--eval-set", help="a prebuilt eval-set.json to score instead of building one for the tokenizer")
     r.add_argument("--arm", help="key of this run in the comparison (default: from the model name)")
     r.add_argument("--arm-label", help="label of this run in the comparison (default: the model id)")
+    r.add_argument("--yes", "-y", action="store_true", help="start without asking about the estimated time")
+    r.add_argument("--max-minutes", type=float, help="do not start (exit 3) if the run could take longer than this")
+    r.add_argument("--no-probe", action="store_true", help="skip the short server speed test; estimate from history "
+                                                          "or the reference run")
     r.add_argument("--skip-setup", action="store_true", help=argparse.SUPPRESS)
+
+    e = sub.add_parser("estimate", help="say how long a run would take, without running it")
+    e.add_argument("--endpoint", help="base URL of the server to measure (omit to use history or the reference run)")
+    e.add_argument("--model", required=True, help="model id as the server lists it")
+    e.add_argument("--quick", action="store_true")
+    e.add_argument("--tasks", help="comma list of task ids (default: every default task)")
+    e.add_argument("--thinking", choices=["on", "off"])
+    e.add_argument("--sandbox", choices=["docker", "native"], default="docker")
+    e.add_argument("--no-probe", action="store_true", help="don't measure the server")
+    e.add_argument("--json", action="store_true", help="print one JSON object")
 
     c = sub.add_parser("compare", help="compare a test run against a reference run")
     c.add_argument("ref", help="reference results file")
@@ -84,6 +98,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for r in rows:
                 print(f"{r['id']:<12} {r['items']:>5}  {'default ' if r['default'] else 'optional'}  {r['label']}: {r['measures']}")
+        return 0
+    if a.cmd == "estimate":
+        import os
+
+        from . import estimate as qest
+        from .suite import parse_tasks
+        try:
+            tasks = parse_tasks(a.tasks)
+        except ValueError as ex:
+            print(f"qualitybench: error: {ex}", file=sys.stderr)
+            return 2
+        probe, warn = None, None
+        if a.endpoint and not a.no_probe:
+            probe, warn = qest.measure(a.endpoint, a.model, os.environ.get("QUALITYBENCH_API_KEY"))
+        doc = qest.estimate(tasks, a.quick, a.thinking, a.model, probe, a.sandbox)
+        if warn:
+            doc["warning"] = warn
+        print(json.dumps(doc) if a.json else "\n".join(qest.summary(doc)))
         return 0
     if a.cmd == "setup":
         from . import envs

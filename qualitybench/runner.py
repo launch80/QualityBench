@@ -8,10 +8,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import sys
+
 from . import __version__, compare, envs, items, report, results
+from . import estimate as qest
 from . import http as qhttp
 from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidecar_for
-from .progress import emit
+from .progress import Tracker, emit, emit_line, track_run
 from .proxy import Proxy
 from .suite import BY_ID, SCORED, parse_tasks, run_order
 from .tasks import harness, native
@@ -113,11 +116,14 @@ def run(a) -> int:
     for t in tasks:
         if t not in todo:
             log_to(ctx, f"{t}: finished earlier, skipping")
-    if todo and not a.skip_setup:
-        envs.setup(todo, a.sandbox)
-
     failed: list[str] = []
     interrupted = False
+    est: dict | None = None
+    probe: dict | None = None
+    tracker: Tracker | None = None
+    stop_tracker = None
+    walls: dict[str, dict] = {}
+    t_run = time.time()
     with Proxy(a.endpoint, ctx.api_key, a.thinking, a.thinking_max_tokens if a.thinking == "on" else 0) as px:
         ctx.api = px.url
         client = qhttp.Client(px.url)
@@ -126,6 +132,14 @@ def run(a) -> int:
                 models = qhttp.wait_ready(client, attempts=6)
                 write_env(ctx, models)
                 preflight(ctx, client)
+                est, probe = _estimate(ctx, a, todo, client)
+                gate = _gate(a, est)
+                if gate is not None:
+                    return gate
+                if not a.skip_setup:
+                    envs.setup(todo, a.sandbox)
+                tracker = Tracker({r["id"]: r["min"] for r in est["tasks"]}, todo)
+                stop_tracker = track_run(tracker)
             elif not (side / "ENV.json").is_file():
                 write_env(ctx, {})
             for i, t in enumerate(todo):
@@ -137,10 +151,14 @@ def run(a) -> int:
                     break
                 log_to(ctx, f"{t}: start")
                 t0 = time.time()
+                if tracker:
+                    tracker.start(t)
+                    tracker.emit()
                 ctx.clear_partial(t)  # a task may mark itself partial again (e.g. a needle length the server refuses)
                 try:
                     run_task(ctx, t, client)
                     log_to(ctx, f"{t}: done in {(time.time() - t0) / 60:.1f} min")
+                    walls[t] = {"items": qest.items_for(t, a.quick), "wall_s": round(time.time() - t0)}
                 except DeadlineHit:
                     ctx.mark_partial(t, f"{t}: cut by the deadline after {(time.time() - t0) / 60:.0f} min; rerun to finish")
                     emit(t, state="partial", done=0, total=BY_ID[t].items)
@@ -150,6 +168,10 @@ def run(a) -> int:
                     ctx.mark_partial(t, f"{t}: failed ({str(e)[:150]})")
                     emit(t, state="failed")
                     log_to(ctx, f"{t}: FAILED: {e}")
+                finally:
+                    if tracker:
+                        tracker.end(t)
+                        tracker.emit()
         except KeyboardInterrupt:
             interrupted = True
             qhttp.cancel_all()
@@ -157,6 +179,13 @@ def run(a) -> int:
         except (TaskFailed, qhttp.HTTPError, RuntimeError) as e:
             log_to(ctx, f"FAILED: {e}")
             return 1
+        finally:
+            if stop_tracker:
+                stop_tracker.set()
+            track_run(None)
+
+    if walls:
+        _finish_timings(ctx, a, walls, probe, est, time.time() - t_run)
 
     if not (side / "ENV.json").is_file():
         return 1
@@ -193,3 +222,69 @@ def _write(ctx: Ctx, doc: dict, out: Path) -> None:
         log_to(ctx, "results: " + w)
     html = report.write(doc, out)
     log_to(ctx, f"wrote {out} and {html.name}")
+
+
+def _estimate(ctx: Ctx, a, todo: list[str], client: qhttp.Client) -> tuple[dict, dict | None]:
+    """Measure the server (unless --no-probe) and estimate the run; print it as a qb:estimate line too."""
+    probe, warn = None, None
+    if not getattr(a, "no_probe", False):
+        probe = qest.cached_probe(ctx.endpoint, ctx.model)
+        if probe is None:
+            log_to(ctx, "measuring the server for the time estimate")
+            try:
+                probe = qest.probe(client, ctx.model, concurrency=min(16, ctx.concurrency))
+            except (OSError, qhttp.HTTPError, ValueError) as e:
+                warn = f"could not measure the server ({str(e)[:160]}); the estimate uses the reference run"
+            else:
+                qest._save_probe(ctx.endpoint, ctx.model, probe)
+    est = qest.estimate(todo, a.quick, a.thinking, ctx.model, probe, a.sandbox)
+    if warn:
+        est["warning"] = warn
+    emit_line("estimate", est)
+    for line in qest.summary(est):
+        log_to(ctx, line)
+    _env_update(ctx, estimate={"total_min": est["total_min"], "range_min": est["range_min"], "source": est["source"]})
+    return est, probe
+
+
+def _gate(a, est: dict) -> int | None:
+    """None to go on; an exit status to stop with."""
+    hi = est["range_min"][1]
+    if a.max_minutes is not None and hi > a.max_minutes:
+        print(f"qualitybench: not started: this run could take up to {qest.fmt_min(hi)}, over --max-minutes "
+              f"{a.max_minutes:g}. Narrow it (--quick, --tasks) or raise the limit.", file=sys.stderr)
+        return 3
+    if a.yes or not sys.stdin.isatty() or not qest.needs_confirm(est, qest.confirm_mode()):
+        return None
+    sys.stderr.write("Start? [y/N] ")
+    sys.stderr.flush()
+    try:
+        ans = sys.stdin.readline().strip().lower()
+    except (OSError, KeyboardInterrupt):
+        ans = ""
+    if ans in ("y", "yes"):
+        return None
+    print("not started. (--yes or QUALITYBENCH_CONFIRM=never skips this question)", file=sys.stderr)
+    return 0
+
+
+def _env_update(ctx: Ctx, **kv) -> None:
+    """Sidecar-only facts (ENV.json); results.build publishes only the env fields the schema allows."""
+    p = ctx.side / "ENV.json"
+    try:
+        env = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return
+    env.update(kv)
+    p.write_text(json.dumps(env, indent=1))
+
+
+def _finish_timings(ctx: Ctx, a, walls: dict, probe: dict | None, est: dict | None, wall_s: float) -> None:
+    _env_update(ctx, wall_min=round(wall_s / 60, 1))
+    notes = {k: v for k, v in (n.split("=", 1) for n in a.note if "=" in n) if k in ("gpu", "engine", "precision")}
+    try:
+        qest.record_timings(ctx.model, a.thinking, a.quick, walls, probe, est, notes or None)
+    except OSError as e:
+        log_to(ctx, f"note: could not record timings: {e}")
+    if est:
+        log_to(ctx, f"took {qest.fmt_min(wall_s / 60)} (estimated {qest.fmt_min(est['total_min'])})")
