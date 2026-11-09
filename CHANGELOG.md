@@ -1,14 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- **`--request-param KEY=VALUE`** adds a field to every chat request through the local proxy, for example
-  `reasoning_effort=high` or `chat_template_kwargs.reasoning_budget=8192`. Dotted keys nest and values
-  parse as JSON. Sampling, token-limit and request-shape fields are refused, so runs still compare item by
-  item. The params are part of the run's identity (a resume with other params is refused), kept in
-  `<name>.qb/ENV.json`, shown as a caveat in the results and report, and `compare` warns when two runs
-  differ. `estimate` takes the flag too, and its history counts only runs with the same params.
-
 ## 0.3.0 (2026-11-09)
 
 - **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
