@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- **Tokenizer failures say why.** When the logprobs or needle inputs can't be built because the tokenizer
-  repo is gated (with or without `HF_TOKEN`) or isn't a repo at all, the failure now says so, instead of
-  "python exited with status 1". It no longer tells you to pass `--tokenizer` when you already did.
-- README: when `--tokenizer` is needed, with examples, and `HF_TOKEN` for gated repos.
-
 ## 0.3.0 (2026-11-09)
 
 - **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
