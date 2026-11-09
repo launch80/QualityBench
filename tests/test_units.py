@@ -274,3 +274,24 @@ def test_token_cap_caveats_and_no_logprobs_is_submittable(tmp_path):
     assert results.validate_shape(doc) == []  # task scores alone may be submitted
     quiet = results.build(_side(tmp_path / "q", {"caps": {"lcb": {"replies": 200, "length": 1, "reasoning": 0}}}, "off"))
     assert not any("token cap" in c for c in quiet["caveats"])  # under 1%: no caveat
+def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
+    # build_inputs.py prints "tokenizer: <why>" as its last line; ensure_inputs makes that the task's failure
+    import sys
+    from qualitybench.context import Ctx, TaskFailed
+    from qualitybench.tasks import native
+    script = tmp_path / "build_inputs.py"
+    script.write_text('print("loading")\nraise SystemExit("tokenizer: org/m is a gated Hugging Face repo and no HF_TOKEN is set")\n')
+    monkeypatch.setenv("QUALITYBENCH_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(native.envs, "ensure_venv", lambda name: None)
+    monkeypatch.setattr(native.envs, "venv_python", lambda name: sys.executable)
+    monkeypatch.setattr(native.envs, "pkg_file", lambda *p: script)
+    for tok, hint in ((None, True), ("org/m", False)):
+        ctx = Ctx(model="org/m", endpoint="x", side=tmp_path / "r.qb", tokenizer=tok)
+        with pytest.raises(TaskFailed) as e:
+            native.ensure_inputs(ctx, "evalset")
+        msg = str(e.value)
+        assert msg.startswith("org/m is a gated Hugging Face repo and no HF_TOKEN is set")
+        assert ("pass --tokenizer" in msg) is hint and "exited with status" not in msg
+    script.write_text("raise SystemExit(3)\n")  # any other failure keeps the generic message, without the hint
+    with pytest.raises(TaskFailed, match="exited with status 3.*for --tokenizer org/m"):
+        native.ensure_inputs(Ctx(model="vllm", endpoint="x", side=tmp_path / "r.qb", tokenizer="org/m"), "evalset")
