@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import glob
-import re
 import json
 import os
 from pathlib import Path
@@ -11,99 +10,14 @@ LMEVAL_PICK = {"gsm8k": ("flexible-extract", "exact_match"), "ifeval": ("none", 
                "mmlu_pro": ("custom-extract", "exact_match")}
 
 
-GSM8K_GRADER = "qb-gsm8k-1"
-_NUM = r"-?\$*\s?\d[\d,]*(?:\.\d+)?"
-
-
-def _num(s: str) -> float | None:
-    s = s.strip().replace("$", "").replace(",", "").replace("%", "").strip().rstrip(".")
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
-def gsm8k_answer(reply: str) -> float | None:
-    """The reply's final answer: the last \\boxed{} or '#### N'; else whichever comes last of a **bold** quantity
-    and an 'Answer: N'; else the final sentence's last money amount, or its last number."""
-    reply = re.sub(r"(?s)<think>.*?</think>", "", reply or "")
-    reply = reply.replace("\\$", "$").replace("{,}", ",")  # LaTeX money and thousands
-    for pat in (r"\\boxed\{([^{}]*)\}", r"####\s*(" + _NUM + ")"):
-        for m in reversed(re.findall(pat, reply)):
-            nums = re.findall(_NUM, m)
-            if nums and (v := _num(nums[-1])) is not None:
-                return v
-    found = []  # (position, value)
-    # **bold** spans, paired left to right; only quantities ("**45 miles**", "**$120**", "**80 + 150 = 230 miles**"),
-    # not headings that hold a number ("**Step 4: ...**", "**4. Total:**").
-    for m in re.finditer(r"\*\*(.+?)\*\*", reply):
-        span = m.group(1).split("=")[-1]
-        q = re.match(r"\s*(" + _NUM + r")(?!\d|\s*[.:)])", span)
-        if q and (v := _num(q.group(1))) is not None:
-            found.append((m.start(), v))
-        elif m.end() >= len(reply.rstrip()) - 2 and (v := _sentence_answer(m.group(1))) is not None:
-            found.append((m.start(), v))  # the reply ends on a bolded sentence: "**Cameron would save 250 pesos.**"
-    for m in re.finditer(r"(?i)\banswer\s*(?:is)?\s*\**\s*[:=]?\s*\**\s*(" + _NUM + ")", reply):
-        if (v := _num(m.group(1))) is not None:
-            found.append((m.start(), v))
-    if found:
-        return max(found)[1]
-    # Fallback: the final sentence's last money amount ("Josh makes $120 in 2 weeks."), else its last number.
-    sentences = [x for x in re.split(r"(?<=[.!?])\s+|\n+", reply.strip()) if re.search(r"\d", x)]
-    return _sentence_answer(sentences[-1]) if sentences else None
-
-
-def _sentence_answer(sentence: str) -> float | None:
-    nums = re.findall(r"\$+\s?\d[\d,]*(?:\.\d+)?", sentence) or re.findall(_NUM, sentence)
-    return _num(nums[-1]) if nums else None
-
-
-def grade_gsm8k(reply: str, target: str) -> bool:
-    gold = _num(target.split("####")[-1])
-    got = gsm8k_answer(reply)
-    return gold is not None and got is not None and abs(got - gold) < 1e-6
-
-
-def _reply(d: dict) -> str:
-    r = d.get("resps")
-    while isinstance(r, list):
-        r = r[0] if r else ""
-    return r or ""
-
-
 def from_lmeval(samples: Path, task: str) -> list[dict]:
     flt, metric = LMEVAL_PICK["mmlu_pro" if task.startswith("mmlu_pro") else task]
     out = []
     for line in open(samples):
         d = json.loads(line)
-        if d["filter"] != flt:
-            continue
-        rec = {"id": f"{task}/{d['doc_id']}", "correct": bool(float(d[metric]))}
-        if task == "gsm8k":
-            rec = {"id": rec["id"], "correct": grade_gsm8k(_reply(d), str(d["target"])), "stock": rec["correct"],
-                   "grader": GSM8K_GRADER}
-        out.append(rec)
+        if d["filter"] == flt:
+            out.append({"id": f"{task}/{d['doc_id']}", "correct": bool(d[metric])})
     return out
-
-
-def regrade_gsm8k(side: Path) -> bool | None:
-    """Re-grade an older run's gsm8k items with GSM8K_GRADER from its lm-eval samples.
-
-    True if regraded (or already graded), False if it was graded the stock way and can't be (no samples),
-    None if the run has no gsm8k.
-    """
-    p = side / "items" / "gsm8k.jsonl"
-    if not p.is_file() or not p.stat().st_size:
-        return None
-    first = json.loads(p.open().readline())
-    if first.get("grader") == GSM8K_GRADER:
-        return True
-    found = sorted((side / "lmeval").rglob("samples_gsm8k_*.jsonl"), key=lambda q: q.stat().st_mtime)
-    if not found:
-        return False
-    keep = set(load(p))
-    write(p, [r for r in from_lmeval(found[-1], "gsm8k") if r["id"] in keep])
-    return True
 
 
 def from_evalplus(eval_results: Path) -> list[dict]:

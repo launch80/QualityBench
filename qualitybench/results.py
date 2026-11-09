@@ -19,9 +19,8 @@ NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
 BASE_CAVEATS = {
     "lcb": "LiveCodeBench v6 problems may predate the model's training cutoff, so absolute scores may be inflated by "
            "contamination. This affects every run equally.",
-    "gsm8k": "GSM8K (0-shot chat) is scored by the reply's final answer (\\boxed{} or '####', else the last bold "
-             "quantity or 'Answer:', else the final sentence's last amount), compared numerically, so $7.00 matches 7. "
-             "lm-eval's stock flexible-extract score, kept per item, misreads such replies and reads several points lower.",
+    "gsm8k": "GSM8K is scored by the last number in the reply (0-shot chat). lm-eval's strict '####' format scores "
+             "about 0 for chat models.",
     "subsets": "MMLU-Pro is a fixed 1000-question subset and BFCL a 400-item subset of four categories.",
 }
 
@@ -95,9 +94,6 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
     state = json.loads((side / "state.json").read_text()) if (side / "state.json").is_file() else {}
     quick = bool(state.get("quick"))
     model = env_raw["model"]
-    for sd in (side, on_side):
-        if sd is not None:
-            items.regrade_gsm8k(sd)
     tasks = task_rows(side, on_side, on_src)
     env = {k: env_raw[k] for k in ENV_KEYS if env_raw.get(k) is not None}
     caveats = []

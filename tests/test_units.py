@@ -188,55 +188,7 @@ def test_tracker_eta_converges():
     assert tr.snapshot()["eta_s"] == 0 and tr.snapshot()["fraction"] == 1.0
 
 
-# ------------------------------------------------------------------ 0.3.0: GSM8K grader, caps, containers, no logprobs
-
-@pytest.mark.parametrize("reply,gold,ok", [
-    ("Sally has $3.00 left.", "3", True),                                   # gsm8k/410
-    ("Peter paid $7.00 in total.", "7", True),                              # gsm8k/280
-    ("Judy makes $7,425 in 1 week.", "7425", True),                         # gsm8k/70
-    ("So **15** liters.\nThere are 15 liters of water in the remaining 24 liters.", "15", True),  # gsm8k/20, bolded
-    ("Josh makes $120 in 2 weeks.", "120", True),                           # gsm8k/1300
-    ("It will cost him $18.00 to purchase 6 pounds of butter.", "18", True),  # gsm8k/1070
-    ("Answer: 42\nThat is 6 groups of 7.", "42", True),
-    (r"The total is \boxed{1,200}.", "1200", True),
-    ("x\n#### 5", "5", True),
-    ("<think>maybe 9</think>She has 10 left.", "10", True),
-    ("She has 9 left.", "10", False),
-    ("I cannot tell.", "10", False),
-])
-def test_gsm8k_grader(reply, gold, ok):
-    from qualitybench.items import grade_gsm8k
-    assert grade_gsm8k(reply, f"some working\n#### {gold}") is ok
-
-
-def _gsm8k_samples(path, replies):
-    rows = []
-    for i, (reply, gold) in enumerate(replies):
-        for flt, em in (("strict-match", 0.0), ("flexible-extract", 0.0)):
-            rows.append({"doc_id": i, "target": f"w\n#### {gold}", "resps": [[reply]], "filter": flt, "exact_match": em})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-
-
-def test_gsm8k_items_keep_stock_and_regrade_old_runs(tmp_path):
-    from qualitybench import items
-    samples = tmp_path / "side" / "lmeval" / "gsm8k" / "m" / "samples_gsm8k_x.jsonl"
-    _gsm8k_samples(samples, [("Sally has $3.00 left.", 3), ("It is 4.", 5)])
-    recs = items.from_lmeval(samples, "gsm8k")
-    assert [(r["id"], r["correct"], r["stock"]) for r in recs] == [("gsm8k/0", True, False), ("gsm8k/1", False, False)]
-    # a 0.2.0 sidecar: stock-graded items, samples still there
-    it = tmp_path / "side" / "items" / "gsm8k.jsonl"
-    it.parent.mkdir(parents=True)
-    items.write(it, [{"id": "gsm8k/0", "correct": False}, {"id": "gsm8k/1", "correct": False}])
-    assert items.regrade_gsm8k(tmp_path / "side") is True
-    assert items.load(it) == {"gsm8k/0": True, "gsm8k/1": False}
-    # no samples left: can't regrade, said so
-    bare = tmp_path / "bare" / "items" / "gsm8k.jsonl"
-    bare.parent.mkdir(parents=True)
-    items.write(bare, [{"id": "gsm8k/0", "correct": False}])
-    assert items.regrade_gsm8k(tmp_path / "bare") is False
-    assert items.regrade_gsm8k(tmp_path / "none") is None
-
+# ------------------------------------------------------------------ 0.3.0: caps, containers, no logprobs
 
 def test_container_run_podman_flags(monkeypatch, tmp_path):
     from qualitybench import envs

@@ -14,7 +14,7 @@ numbers side by side.
 
 | Task | Items | Scored as |
 |---|---|---|
-| `gsm8k` | 1319 | final answer in the reply, compared numerically, 0-shot chat (lm-eval prompts) |
+| `gsm8k` | 1319 | last number in the reply, 0-shot chat (lm-eval) |
 | `ifeval` | 541 | prompt-level strict (lm-eval) |
 | `mmlu_pro` | 1000 | fixed subset over 14 subjects, exact letter (lm-eval) |
 | `humaneval` | 164 | HumanEval+ base + plus tests, sandboxed (evalplus) |

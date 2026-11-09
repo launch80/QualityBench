@@ -65,10 +65,6 @@ def arm_block(ref_side: Path, test_side: Path, test_doc: dict, label: str | None
             warn.append(f"logprobs not compared: {e}")
     elif rz.is_file() or tz.is_file():
         warn.append("logprobs not compared: only one run has them")
-    graded = (items.regrade_gsm8k(ref_side), items.regrade_gsm8k(test_side))
-    if None not in graded and graded[0] != graded[1]:
-        warn.append("gsm8k: one run is graded the stock lm-eval way (no samples left to re-grade), the other by "
-                    "QualityBench's final-answer grader; the paired delta mixes the two")
     tasks = {}
     for t in SCORED:
         R, T = items.load(ref_side / "items" / f"{t}.jsonl"), items.load(test_side / "items" / f"{t}.jsonl")
