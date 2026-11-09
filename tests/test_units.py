@@ -186,3 +186,15 @@ def test_tracker_eta_converges():
     tr.update("b", {"state": "scored"})
     tr.end("b")
     assert tr.snapshot()["eta_s"] == 0 and tr.snapshot()["fraction"] == 1.0
+
+
+def test_gsm8k_scores_the_number_not_its_format(tmp_path):
+    from qualitybench.items import from_lmeval
+    rows = [("$26.00", "#### 26", 0, True), ("26.", "#### 26", 0, True), ("1,234", "#### 1234", 0, True),
+            ("26.5", "#### 26", 0, False), ("[invalid]", "#### 26", 0, False), ("$-3.0", "#### -3", 0, True),
+            ("26", "#### 26", 1, True)]
+    f = tmp_path / "samples_gsm8k.jsonl"
+    f.write_text("".join(json.dumps({"doc_id": i, "filter": "flexible-extract", "filtered_resps": [got],
+                                     "target": f"steps...\n{t}", "exact_match": em}) + "\n"
+                         for i, (got, t, em, _) in enumerate(rows)))
+    assert [r["correct"] for r in from_lmeval(f, "gsm8k")] == [r[3] for r in rows]

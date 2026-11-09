@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **GSM8K compares the answer as a number.** lm-eval strips `$` and `,` from the last number in the reply,
+  then compares it with the target as text, so `$26.00` was wrong for a target of 26. Such a reply now
+  counts as right; nothing lm-eval accepted is rejected. On a Qwen3.8-27B thinking-on run this moved 36 of
+  1319 items (93.3% to 96.1%). GSM8K scores from earlier versions are not comparable: rescore both runs, or
+  rerun the older one.
+
 ## 0.2.0 (2026-11-06)
 
 - **Time estimate before a run.** `run` measures the server for a few seconds after the warmup (16 parallel

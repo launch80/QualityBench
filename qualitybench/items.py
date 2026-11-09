@@ -4,10 +4,29 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 LMEVAL_PICK = {"gsm8k": ("flexible-extract", "exact_match"), "ifeval": ("none", "prompt_level_strict_acc"),
                "mmlu_pro": ("custom-extract", "exact_match")}
+
+
+def number(s: str) -> Decimal | None:
+    """A gsm8k answer as a number: "$26.00", "26." and "1,234" are 26, 26 and 1234."""
+    try:
+        return Decimal(re.sub(r"[$,]", "", str(s)).strip().rstrip("."))
+    except InvalidOperation:
+        return None
+
+
+def gsm8k_correct(d: dict) -> bool:
+    """lm-eval compares the last number as text after stripping "$" and ",", so "$26.00" fails a target of 26.
+    A reply that lm-eval accepts stays accepted; one it rejects is right if the number is the same."""
+    if d["exact_match"]:
+        return True
+    got, want = number(d["filtered_resps"][0]), number(d["target"].split("####")[-1])
+    return got is not None and got == want
 
 
 def from_lmeval(samples: Path, task: str) -> list[dict]:
@@ -16,7 +35,8 @@ def from_lmeval(samples: Path, task: str) -> list[dict]:
     for line in open(samples):
         d = json.loads(line)
         if d["filter"] == flt:
-            out.append({"id": f"{task}/{d['doc_id']}", "correct": bool(d[metric])})
+            ok = gsm8k_correct(d) if task == "gsm8k" else bool(d[metric])
+            out.append({"id": f"{task}/{d['doc_id']}", "correct": ok})
     return out
 
 

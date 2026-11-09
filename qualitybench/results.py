@@ -18,8 +18,8 @@ NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
 BASE_CAVEATS = {
     "lcb": "LiveCodeBench v6 problems may predate the model's training cutoff, so absolute scores may be inflated by "
            "contamination. This affects every run equally.",
-    "gsm8k": "GSM8K is scored by the last number in the reply (0-shot chat). lm-eval's strict '####' format scores "
-             "about 0 for chat models.",
+    "gsm8k": "GSM8K is scored by the last number in the reply (0-shot chat), compared as a number, so $26.00 "
+             "matches 26. lm-eval's strict '####' format scores about 0 for chat models.",
     "subsets": "MMLU-Pro is a fixed 1000-question subset and BFCL a 400-item subset of four categories.",
 }
 
