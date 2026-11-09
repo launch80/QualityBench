@@ -153,7 +153,7 @@ def test_thinking_preflight(home, tmp_path):
         assert run(fake, tmp_path / "r.json", "--thinking", "on") == 0
         chat = [r[2] for r in fake.requests if r[1].endswith("/chat/completions")]
         assert all(b["chat_template_kwargs"]["enable_thinking"] is True for b in chat)
-        assert all(b["max_tokens"] >= 16384 for b in chat)
+        assert all(b["max_tokens"] >= 32768 for b in chat)
     finally:
         fake.close()
 
@@ -163,6 +163,33 @@ def test_default_thinking_model_is_told_to_pick(home, tmp_path, capsys):
     try:
         assert run(fake, tmp_path / "d.json") == 1
         assert "--thinking off" in (tmp_path / "d.qb" / "run.log").read_text()
+    finally:
+        fake.close()
+
+
+def test_inline_think_counts_as_thinking(home, tmp_path):
+    fake = Fake(inline=True)  # no reasoning parser: the <think> block arrives in content
+    try:
+        assert run(fake, tmp_path / "d.json") == 1
+        assert "--thinking off" in (tmp_path / "d.qb" / "run.log").read_text()
+        assert run(fake, tmp_path / "e.json", "--thinking", "on") == 0
+    finally:
+        fake.close()
+
+
+def test_proxy_counts_capped_and_reasoning_replies(home):
+    fake = Fake(reasoning=True, finish="length")
+    try:
+        with Proxy(fake.url) as px:
+            c = qhttp.Client(px.url)
+            for _ in range(3):
+                c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
+            c.post("/v1/completions", {"model": "fake", "prompt": [1, 2, 3], "max_tokens": 1})  # not a chat
+            assert px.take_stats() == {"replies": 3, "length": 3, "reasoning": 3}
+            assert px.take_stats() == {"replies": 0, "length": 0, "reasoning": 0}
+            fake.finish, fake.reasoning = "stop", False
+            c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
+            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0}
     finally:
         fake.close()
 

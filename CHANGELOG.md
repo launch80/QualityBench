@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
+  whichever comes last of a bold quantity (`**$132.00**`) and `Answer: N`, else the final sentence's last money
+  amount or number. It is compared numerically, so `$7.00` matches 7 and "Judy makes $7,425 in 1 week." reads
+  7425, not 1. lm-eval's stock flexible-extract plus exact_match misread those replies. Re-grading the six full
+  Qwopus study runs adds 126–133 correct items per thinking-off run (about +9.5 points; 63 with thinking on),
+  and loses at most 2 items that the stock scoring had counted correct. The prompt is unchanged. Each item keeps the stock result as `stock`, and the log prints both counts.
+  Older runs are re-graded from their lm-eval samples when built or compared. `compare` warns when one side
+  can't be re-graded.
+- **Token caps.** The proxy counts chat replies that stopped at the token cap (`finish_reason: length`) and
+  replies with reasoning, per task. Any task where 1% or more were cut gets a caveat in the results and a log
+  line. So does a model that reasoned while `--thinking` was left at the server default. The preflight now
+  also catches reasoning returned inline as `<think>` by a server with no reasoning parser.
+  `--thinking-max-tokens` now defaults to 32768 (was 16384).
+- **Podman.** The code tasks run with docker or podman. `QUALITYBENCH_CONTAINER=podman` picks podman, which is
+  also used when docker is missing. Podman runs get `--userns=keep-id` and `--security-opt label=disable`.
+  The evalplus image is fully qualified (`docker.io/ganler/evalplus@sha256:...`).
+- **Task scores without logprobs.** A results file with an empty `logprobs` block is no longer reported as
+  unpublishable; launch80 accepts task-only runs and shows perplexity and KLD as n/a. The results carry a
+  caveat, and the logprobs error on servers without `prompt_logprobs` says how to skip the task.
+
 ## 0.2.0 (2026-11-06)
 
 - **Time estimate before a run.** `run` measures the server for a few seconds after the warmup (16 parallel

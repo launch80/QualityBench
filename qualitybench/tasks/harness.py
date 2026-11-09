@@ -7,7 +7,6 @@ skip finished shards and problems.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 from pathlib import Path
@@ -57,7 +56,8 @@ def run_lmeval(ctx: Ctx, task: str) -> None:
         f = _newest(out, f"samples_{t}_*.jsonl")
         recs += items.from_lmeval(f, t)
     k, n = items.write(ctx.items_path(task), recs)
-    log_to(ctx, f"{task}: {k}/{n} correct")
+    stock = f" (lm-eval's stock scoring: {sum(r['stock'] for r in recs)}/{n})" if task == "gsm8k" else ""
+    log_to(ctx, f"{task}: {k}/{n} correct{stock}")
 
 
 def _newest(root: Path, pattern: str) -> Path:
@@ -109,10 +109,10 @@ def run_evalplus(ctx: Ctx, ds: str) -> None:
                 "--i-just-wanna-run"], ds, env=env)
     else:
         cache = envs.home() / "xdg" / "evalplus"
-        ctx.sh(["docker", "run", "--rm", "--network", "none", "--memory", "8g", "--pids-limit", "1024",
-                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}",
-                "-e", "HOME=/tmp", "-e", "XDG_CACHE_HOME=/tmp/xc", "-v", f"{dest.parent}:/work",
-                "-v", f"{cache}:/cache:ro", envs.EVALPLUS_IMAGE, "bash", "-c",
+        ctx.sh(envs.container_run("none", [(dest.parent, "/work", "rw"), (cache, "/cache", "ro")],
+                                  ["--memory", "8g", "--pids-limit", "1024", "--cap-drop", "ALL", "--security-opt",
+                                   "no-new-privileges", "-e", "HOME=/tmp", "-e", "XDG_CACHE_HOME=/tmp/xc"])
+               + [envs.EVALPLUS_IMAGE, "bash", "-c",
                 f"mkdir -p /tmp/xc/evalplus && cp /cache/* /tmp/xc/evalplus/ && "
                 f"evalplus.evaluate --dataset {ds} --samples /work/{ds}/{name} --i-just-wanna-run"], ds)
     res = dest / (name[:-6] + "_eval_results.json")

@@ -32,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--tasks", help="comma list of task ids (default: every default task); see `qualitybench tasks`")
     r.add_argument("--thinking", choices=["on", "off"], help="force thinking on or off through the local proxy "
                                                              "(default: the server's own default)")
-    r.add_argument("--thinking-max-tokens", type=int, default=16384, help="max_tokens floor with --thinking on (16384)")
+    r.add_argument("--thinking-max-tokens", type=int, default=32768,
+                   help="max_tokens floor with --thinking on (32768; thinking models can spend 10-30k tokens on hard code)")
     r.add_argument("--reference", help="results file of a reference run: also compare against it (KLD, paired "
                                        "deltas, thresholds); --out then holds the comparison")
     r.add_argument("--thresholds", help="thresholds markdown table (default: the built-in bars)")
@@ -42,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--title", help="report title")
     r.add_argument("--concurrency", type=int, default=16, help="requests in flight per harness (16)")
     r.add_argument("--sandbox", choices=["docker", "native"], default="docker",
-                   help="where model-written code is executed: a network-less container (default) or directly on "
-                        "this machine (only on a disposable box)")
+                   help="where model-written code is executed: a network-less container (default; docker, or podman "
+                        "with QUALITYBENCH_CONTAINER=podman) or directly on this machine (only on a disposable box)")
     r.add_argument("--tokenizer", help="HF repo or local dir of the model's tokenizer, for logprobs and needle "
                                        "(default: the model id)")
     r.add_argument("--eval-set", help="a prebuilt eval-set.json to score instead of building one for the tokenizer")

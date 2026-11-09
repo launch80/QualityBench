@@ -16,7 +16,7 @@ class Task:
 
 
 SUITE: list[Task] = [
-    Task("gsm8k", "GSM8K", 1319, "last number in the reply, 0-shot chat", cost=19),
+    Task("gsm8k", "GSM8K", 1319, "final answer in the reply, compared numerically, 0-shot chat", cost=19),
     Task("ifeval", "IFEval", 541, "prompt-level strict", cost=9),
     Task("mmlu_pro", "MMLU-Pro", 1000, "fixed 1000-question subset, 14 subjects", cost=42),
     Task("humaneval", "HumanEval+", 164, "evalplus base + plus tests, sandboxed", cost=22),

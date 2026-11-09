@@ -46,5 +46,6 @@ def test_task_rows_from_a_sidecar(tmp_path):
             shutil.copy(f, dst / "items" / f.name)
     rows = {r["id"]: r for r in results.task_rows(side, on, "bf16-think")}
     want = {t["id"]: t for t in json.loads((FIX / "study-report-tasks.json").read_text())["tasks"]}
-    assert rows["gsm8k"] == want["gsm8k"]
+    # The study's report described gsm8k as "last number"; the description changed in 0.3.0, the numbers did not.
+    assert {k: v for k, v in rows["gsm8k"].items() if k != "how"} == {k: v for k, v in want["gsm8k"].items() if k != "how"}
     assert rows["mmlu_pro"]["off"] == want["mmlu_pro"]["off"] and "on" not in rows["mmlu_pro"]  # its thinking-on run is bf16-think2

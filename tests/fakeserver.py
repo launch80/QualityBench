@@ -9,9 +9,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Fake:
-    def __init__(self, noise: float = 0.0, reasoning: bool = False):
+    def __init__(self, noise: float = 0.0, reasoning: bool = False, inline: bool = False, finish: str = "stop"):
         self.noise = noise          # shifts logprobs, so a "quantized" server differs from the reference
         self.reasoning = reasoning
+        self.inline = inline        # reasoning inside content as <think>…</think> (no reasoning parser)
+        self.finish = finish        # finish_reason of chat replies ("length": cut at max_tokens)
         self.requests = []
         self.aborted = threading.Event()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -59,10 +61,12 @@ class Fake:
                     msg = {"role": "assistant", "content": content}
                     if fake.reasoning:
                         msg["reasoning_content"] = "thinking..."
+                    if fake.inline:
+                        msg["content"] = "<think>thinking...</think>\n\n" + content
                     toks = content.split(" ")
                     lp = [{"token": t, "logprob": -0.1, "top_logprobs": [{"token": t, "logprob": -0.1},
                                                                           {"token": "x", "logprob": -2.5}]} for t in toks]
-                    return self._json({"choices": [{"message": msg, "finish_reason": "stop", "logprobs": {"content": lp}}],
+                    return self._json({"choices": [{"message": msg, "finish_reason": fake.finish, "logprobs": {"content": lp}}],
                                        "usage": {"prompt_tokens": len(text) // 4}})
                 if self.path.endswith("/completions"):
                     ids = body["prompt"]

@@ -4,6 +4,8 @@ It does three things the harnesses cannot:
 - forces thinking on or off (chat_template_kwargs.enable_thinking), for servers you cannot restart;
   with thinking on it raises max_tokens to a floor and drops `stop` (vLLM matches stop strings
   inside the reasoning too);
+- counts chat replies that stopped at the token cap (finish_reason "length") and replies with reasoning,
+  so a run can say when a task's scores are cut short (take_stats);
 - adds the endpoint's bearer key, so the key never reaches a harness's command line;
 - cancels the upstream generation when a harness drops its request (closes the upstream connection
   as soon as the client's socket closes), so abandoned generations never pile up on the server.
@@ -17,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import http as qhttp
 
+TALLY_CAP = 16 << 20  # bytes of one reply kept for counting; longer replies are not counted
 HOP = {"host", "content-length", "accept-encoding", "connection", "transfer-encoding", "authorization"}
 
 
@@ -26,6 +29,8 @@ class Proxy:
         up = upstream.rstrip("/")
         self.upstream = up[:-3] if up.endswith("/v1") else up
         self.api_key, self.thinking, self.min_max_tokens = api_key, thinking, min_max_tokens
+        self._lock = threading.Lock()
+        self._stats = {"replies": 0, "length": 0, "reasoning": 0}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -41,6 +46,43 @@ class Proxy:
     def __exit__(self, *exc):
         self.server.shutdown()
         self.server.server_close()
+
+    def take_stats(self) -> dict:
+        """Chat replies seen since the last call: total, stopped by the token cap, with reasoning. Resets."""
+        with self._lock:
+            out, self._stats = self._stats, {"replies": 0, "length": 0, "reasoning": 0}
+        return out
+
+    def tally(self, body: bytes) -> None:
+        """Count one chat/completions reply (JSON, or the SSE events of a streamed one)."""
+        fins, reasoning = [], False
+        text = body.decode("utf-8", "replace")
+        docs = []
+        if text.lstrip().startswith("{"):
+            try:
+                docs = [json.loads(text)]
+            except ValueError:
+                return
+        else:
+            for line in text.splitlines():
+                if line.startswith("data:") and line[5:].strip() not in ("", "[DONE]"):
+                    try:
+                        docs.append(json.loads(line[5:]))
+                    except ValueError:
+                        pass
+        for d in docs:
+            for ch in d.get("choices") or []:
+                m = ch.get("message") or ch.get("delta") or {}
+                if m.get("reasoning") or m.get("reasoning_content") or "<think>" in (m.get("content") or ""):
+                    reasoning = True
+                if ch.get("finish_reason"):
+                    fins.append(ch["finish_reason"])
+        if not fins:
+            return
+        with self._lock:
+            self._stats["replies"] += 1
+            self._stats["length"] += fins[-1] == "length"
+            self._stats["reasoning"] += reasoning
 
     def rewrite(self, path: str, body: bytes) -> bytes:
         if not path.rstrip("/").endswith("/chat/completions") or not self.thinking:
@@ -95,9 +137,19 @@ class Proxy:
                             self.send_header(k, v)
                     self.send_header("Connection", "close")
                     self.end_headers()
+                    keep = [] if r.status == 200 and self.path.rstrip("/").endswith("/chat/completions") else None
+                    size = 0
                     while chunk := r.read1(65536) if hasattr(r, "read1") else r.read(65536):
                         self.wfile.write(chunk)
                         self.wfile.flush()
+                        if keep is not None:
+                            size += len(chunk)
+                            if size <= TALLY_CAP:
+                                keep.append(chunk)
+                            else:
+                                keep = None
+                    if keep:
+                        proxy.tally(b"".join(keep))
                 except Exception as e:  # upstream failed or was cancelled
                     try:
                         msg = json.dumps({"error": {"message": f"qualitybench proxy: {e}"}}).encode()

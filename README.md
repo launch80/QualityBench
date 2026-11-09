@@ -14,7 +14,7 @@ numbers side by side.
 
 | Task | Items | Scored as |
 |---|---|---|
-| `gsm8k` | 1319 | last number in the reply, 0-shot chat (lm-eval) |
+| `gsm8k` | 1319 | final answer in the reply, compared numerically, 0-shot chat (lm-eval prompts) |
 | `ifeval` | 541 | prompt-level strict (lm-eval) |
 | `mmlu_pro` | 1000 | fixed subset over 14 subjects, exact letter (lm-eval) |
 | `humaneval` | 164 | HumanEval+ base + plus tests, sandboxed (evalplus) |
@@ -31,12 +31,14 @@ re-scoring that study's per-item files with this package reproduces its publishe
 ## Install
 
 ```bash
-uv tool install git+https://github.com/launch80/QualityBench@v0.1.0
+uv tool install git+https://github.com/launch80/QualityBench@v0.3.0
 qualitybench setup            # one time: harness environments, the LCB image, datasets
 ```
 
-You need Python 3.10+, [uv](https://docs.astral.sh/uv/) and git. Docker is needed for the code tasks, which run
-model-written code in containers with no network. The eval harnesses pin incompatible dependencies, so
+You need Python 3.10+, [uv](https://docs.astral.sh/uv/) and git. Docker or podman is needed for the code tasks,
+which run model-written code in containers with no network. QualityBench uses docker when it is installed, else
+podman; `QUALITYBENCH_CONTAINER=podman` picks podman explicitly, and rootless podman (Fedora, SELinux) works
+without a docker shim. The eval harnesses pin incompatible dependencies, so
 `setup` installs each into its own locked environment under `~/.cache/qualitybench` (set `QUALITYBENCH_HOME`
 to move it). A run also installs what it needs on first use.
 
@@ -62,6 +64,7 @@ Useful options:
 | `--quick` | a fixed tenth of each task's items. A smoke run; quick runs compare only with quick runs |
 | `--tasks gsm8k,ifeval` | a subset of the suite (`qualitybench tasks` lists ids) |
 | `--thinking on\|off` | forces thinking through a local proxy and checks that reasoning is present or absent |
+| `--thinking-max-tokens 32768` | with `--thinking on`, every reply may use at least this many tokens (default 32768) |
 | `--deadline 6h` | starts no work after the deadline; cut tasks are listed in `partials`, not dropped |
 | `--reference ref.json` | also compares this run with a reference run; `--out` then holds the comparison |
 | `--note precision=INT4 --note engine="vLLM 0.30" --note gpu="RTX PRO 6000"` | labels for the report |
@@ -104,8 +107,16 @@ logprob chunks are kept and skipped.
   `--max-logprobs 64` and speculative decoding off (prompt logprobs are not exact under MTP).
 - **bfcl** scores the server's own tool-call parser, so enable it (for vLLM, `--enable-auto-tool-choice --tool-call-parser ...`).
 - **needle** needs a 128k context for its long half. A shorter server skips that length and says so in `partials`.
+- **logprobs is optional for publishing.** On a server without `prompt_logprobs` (llama.cpp, radiance), run
+  `--tasks gsm8k,ifeval,mmlu_pro,humaneval,mbpp,bfcl,lcb,needle`. The results carry task scores only, and the page
+  shows perplexity and KLD as n/a.
 - **--thinking on** needs a reasoning parser (vLLM `--reasoning-parser`) and a chat template that honours
   `enable_thinking`.
+- **Thinking models need --thinking.** Without it the harnesses keep their own token limits (2048, or 4096 for
+  LiveCodeBench), which a thinking model spends before it answers. The preflight stops a model that thinks by
+  default, and every run counts replies that stopped at the token cap. A task where 1% or more did gets a caveat
+  in the results. Use `--thinking off` for the baseline, or `--thinking on --thinking-max-tokens 32768` (or more
+  for a large model on hard code problems) to measure thinking quality.
 
 ## Compare
 
