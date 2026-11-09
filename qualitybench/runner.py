@@ -16,7 +16,7 @@ from . import estimate as qest
 from . import http as qhttp
 from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidecar_for
 from .progress import Tracker, emit, emit_line, track_run
-from .proxy import Proxy
+from .proxy import Proxy, describe, parse_params
 from .suite import BY_ID, SCORED, parse_tasks, run_order
 from .tasks import harness, native
 
@@ -89,7 +89,7 @@ def write_env(ctx: Ctx, server_models: dict) -> None:
            **harness.harness_versions(), "sandbox": ctx.sandbox,
            "thinking": ctx.thinking or "server default",
            "thinking_on_min_max_tokens": ctx.think_min_tokens if ctx.thinking == "on" else 0,
-           "evalplus_image": envs.EVALPLUS_IMAGE, "container": _runtime(ctx), "endpoint": ctx.endpoint, "host": socket.gethostname(),
+           "container": _runtime(ctx), "request_params": ctx.params, "endpoint": ctx.endpoint, "host": socket.gethostname(),
            "qualitybench": __version__, "server_models": server_models}
     if old.get("date"):
         env["resumed"] = datetime.now().astimezone().isoformat()
@@ -115,10 +115,13 @@ def run(a) -> int:
     side.mkdir(parents=True, exist_ok=True)
     ctx = Ctx(model=a.model, endpoint=a.endpoint, side=side, quick=a.quick, thinking=a.thinking,
               think_min_tokens=a.thinking_max_tokens, concurrency=a.concurrency, sandbox=a.sandbox, deadline=deadline,
-              tokenizer=a.tokenizer, eval_set=a.eval_set, api_key=os.environ.get("QUALITYBENCH_API_KEY"))
+              tokenizer=a.tokenizer, eval_set=a.eval_set, api_key=os.environ.get("QUALITYBENCH_API_KEY"),
+              params=parse_params(a.request_param))
     ctx.load_state()
     prev = ctx.state.get("run")
     now = {"model": a.model, "quick": a.quick, "thinking": a.thinking or ""}
+    if ctx.params:
+        now["request_params"] = ctx.params  # absent when unset, so sidecars from older versions still resume
     if prev and prev != now:
         raise SystemExit(f"{side.name}/ holds a run with {prev}, not {now}. Rerun the same command to resume it, "
                          "or pick another --out")
@@ -126,6 +129,8 @@ def run(a) -> int:
     ctx.save_state()
     log_to(ctx, f"qualitybench {__version__}: {a.model} at {a.endpoint}, tasks {','.join(tasks)}"
                 f"{' (quick)' if a.quick else ''}, results {out}")
+    if ctx.params:
+        log_to(ctx, f"request params on every chat request: {describe(ctx.params)}")
 
     todo = [t for t in run_order(tasks, deadline is not None) if not finished(ctx, t)]
     for t in tasks:
@@ -139,7 +144,8 @@ def run(a) -> int:
     stop_tracker = None
     walls: dict[str, dict] = {}
     t_run = time.time()
-    with Proxy(a.endpoint, ctx.api_key, a.thinking, a.thinking_max_tokens if a.thinking == "on" else 0) as px:
+    with Proxy(a.endpoint, ctx.api_key, a.thinking, a.thinking_max_tokens if a.thinking == "on" else 0,
+               ctx.params) as px:
         ctx.api = px.url
         client = qhttp.Client(px.url)
         try:
@@ -275,7 +281,7 @@ def _estimate(ctx: Ctx, a, todo: list[str], client: qhttp.Client) -> tuple[dict,
                 warn = f"could not measure the server ({str(e)[:160]}); the estimate uses the reference run"
             else:
                 qest._save_probe(ctx.endpoint, ctx.model, probe)
-    est = qest.estimate(todo, a.quick, a.thinking, ctx.model, probe, a.sandbox)
+    est = qest.estimate(todo, a.quick, a.thinking, ctx.model, probe, a.sandbox, params=ctx.params)
     if warn:
         est["warning"] = warn
     emit_line("estimate", est)
@@ -321,7 +327,7 @@ def _finish_timings(ctx: Ctx, a, walls: dict, probe: dict | None, est: dict | No
     _env_update(ctx, wall_min=round(wall_s / 60, 1))
     notes = {k: v for k, v in (n.split("=", 1) for n in a.note if "=" in n) if k in ("gpu", "engine", "precision")}
     try:
-        qest.record_timings(ctx.model, a.thinking, a.quick, walls, probe, est, notes or None)
+        qest.record_timings(ctx.model, a.thinking, a.quick, walls, probe, est, notes or None, ctx.params)
     except OSError as e:
         log_to(ctx, f"note: could not record timings: {e}")
     if est:

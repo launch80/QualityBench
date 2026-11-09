@@ -1,17 +1,19 @@
 """A local pass-through in front of the endpoint that every harness talks to.
 
-It does three things the harnesses cannot:
+It does four things the harnesses cannot:
 - forces thinking on or off (chat_template_kwargs.enable_thinking), for servers you cannot restart;
   with thinking on it raises max_tokens to a floor and drops `stop` (vLLM matches stop strings
   inside the reasoning too);
 - counts chat replies that stopped at the token cap (finish_reason "length") and replies with reasoning,
   so a run can say when a task's scores are cut short (take_stats);
+- adds the run's --request-param fields (e.g. reasoning_effort) to every chat request;
 - adds the endpoint's bearer key, so the key never reaches a harness's command line;
 - cancels the upstream generation when a harness drops its request (closes the upstream connection
   as soon as the client's socket closes), so abandoned generations never pile up on the server.
 """
 from __future__ import annotations
 
+import copy
 import json
 import select
 import threading
@@ -22,15 +24,72 @@ from . import http as qhttp
 TALLY_CAP = 16 << 20  # bytes of one reply kept for counting; longer replies are not counted
 HOP = {"host", "content-length", "accept-encoding", "connection", "transfer-encoding", "authorization"}
 
+_GREEDY = "decoding is greedy with seed 608, so runs compare item by item"
+_TASK = "each task sets it"
+#: --request-param keys a run may not change, and why.
+REFUSED = {**dict.fromkeys(("temperature", "top_p", "top_k", "min_p", "seed", "n", "best_of", "use_beam_search",
+                            "presence_penalty", "frequency_penalty", "repetition_penalty", "logit_bias"), _GREEDY),
+           **dict.fromkeys(("max_tokens", "max_completion_tokens"),
+                           "each task sets its own; with --thinking on, raise the floor with --thinking-max-tokens"),
+           **dict.fromkeys(("model", "messages", "stream", "stream_options", "stop", "logprobs", "top_logprobs", "tools",
+                            "tool_choice", "parallel_tool_calls", "response_format"), _TASK),
+           "chat_template_kwargs.enable_thinking": "use --thinking on|off"}
+
+
+def flat(d: dict, prefix: str = ""):
+    """(dotted key, value) for every leaf of a nested dict."""
+    for k, v in d.items():
+        if isinstance(v, dict) and v:
+            yield from flat(v, f"{prefix}{k}.")
+        else:
+            yield f"{prefix}{k}", v
+
+
+def parse_params(pairs: list[str]) -> dict:
+    """--request-param KEY=VALUE pairs as one dict: dotted keys nest, values parse as JSON when they can."""
+    out: dict = {}
+    for pair in pairs:
+        k, sep, v = pair.partition("=")
+        parts = k.strip().split(".")
+        if not sep or not all(parts):
+            raise ValueError(f"--request-param {pair!r}: expected KEY=VALUE, e.g. reasoning_effort=high")
+        node = out
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"--request-param {pair!r}: {p} is already set to a value, not an object")
+        try:
+            node[parts[-1]] = json.loads(v)
+        except ValueError:
+            node[parts[-1]] = v
+    for key, _ in flat(out):
+        why = REFUSED.get(key) or REFUSED.get(key.split(".")[0])
+        if why:
+            raise ValueError(f"--request-param {key} is not allowed: {why}")
+    return out
+
+
+def describe(params: dict) -> str:
+    return ", ".join(f"{k}={v if isinstance(v, str) else json.dumps(v)}" for k, v in flat(params))
+
+
+def merge(into: dict, extra: dict) -> None:
+    for k, v in extra.items():
+        if isinstance(v, dict) and isinstance(into.get(k), dict):
+            merge(into[k], v)
+        else:
+            into[k] = copy.deepcopy(v)  # the request is edited afterwards; never share the run's params
+
 
 class Proxy:
     def __init__(self, upstream: str, api_key: str | None = None, thinking: str | None = None,
-                 min_max_tokens: int = 0):
+                 min_max_tokens: int = 0, params: dict | None = None):
         up = upstream.rstrip("/")
         self.upstream = up[:-3] if up.endswith("/v1") else up
         self.api_key, self.thinking, self.min_max_tokens = api_key, thinking, min_max_tokens
         self._lock = threading.Lock()
         self._stats = {"replies": 0, "length": 0, "reasoning": 0}
+        self.params = params or {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -85,12 +144,15 @@ class Proxy:
             self._stats["reasoning"] += reasoning
 
     def rewrite(self, path: str, body: bytes) -> bytes:
-        if not path.rstrip("/").endswith("/chat/completions") or not self.thinking:
+        if not path.rstrip("/").endswith("/chat/completions") or not (self.thinking or self.params):
             return body
         try:
             d = json.loads(body)
         except ValueError:
             return body
+        merge(d, self.params)
+        if not self.thinking:
+            return json.dumps(d).encode()
         d.setdefault("chat_template_kwargs", {})["enable_thinking"] = self.thinking == "on"
         if self.thinking == "on":
             if self.min_max_tokens:

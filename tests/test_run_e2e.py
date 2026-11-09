@@ -204,6 +204,39 @@ def test_rerun_with_other_tier_is_refused(home, tmp_path):
         fake.close()
 
 
+def test_request_params_reach_chat_requests_only(home, tmp_path, capsys):
+    fake = Fake(reasoning=True)
+    try:
+        params = ["--request-param", "reasoning_effort=high", "--request-param", "chat_template_kwargs.budget=4096"]
+        assert run(fake, tmp_path / "r.json", "--thinking", "on", *params) == 0
+        chat = [r[2] for r in fake.requests if r[1].endswith("/chat/completions") and "chat_template_kwargs" in r[2]]
+        assert chat and all(b["reasoning_effort"] == "high" for b in chat)
+        assert all(b["chat_template_kwargs"] == {"budget": 4096, "enable_thinking": True} for b in chat)
+        scored = [r[2] for r in fake.requests if r[1] == "/v1/completions"]
+        assert scored and not any("reasoning_effort" in b for b in scored)  # prompt logprobs stay as they are
+        env = json.loads((tmp_path / "r.qb" / "ENV.json").read_text())
+        assert env["request_params"] == {"reasoning_effort": "high", "chat_template_kwargs": {"budget": 4096}}
+        doc = json.loads((tmp_path / "r.json").read_text())
+        assert "request_params" not in doc["env"]  # the schema has no room: it is a caveat instead
+        assert any("reasoning_effort=high, chat_template_kwargs.budget=4096" in c for c in doc["caveats"])
+        hist = [json.loads(l) for l in (home / "timings.jsonl").read_text().splitlines()]
+        assert hist[-1]["request_params"] == env["request_params"]
+        # resuming with other params (or none) is refused; the same params resume
+        with pytest.raises(SystemExit):
+            run(fake, tmp_path / "r.json", "--thinking", "on", "--request-param", "reasoning_effort=low")
+        with pytest.raises(SystemExit):
+            run(fake, tmp_path / "r.json", "--thinking", "on")
+        assert run(fake, tmp_path / "r.json", "--thinking", "on", *params) == 0
+        # compare warns when the two runs sent different params
+        assert run(fake, tmp_path / "plain.json", "--thinking", "on") == 0
+        capsys.readouterr()
+        assert main(["compare", str(tmp_path / "plain.json"), str(tmp_path / "r.json"), "--out", str(tmp_path / "c.json")]) == 0
+        err = capsys.readouterr().err
+        assert "different request params (reference: none; test: reasoning_effort=high" in err
+    finally:
+        fake.close()
+
+
 def test_proxy_adds_key_and_cancels_abandoned_requests(home, monkeypatch):
     fake = Fake()
     try:

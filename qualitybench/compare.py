@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import envs, items, kld, stats
 from .context import sidecar_for
+from .proxy import describe
 from .results import file_hash, parse_thresholds
 from .suite import SCORED
 
@@ -87,6 +88,20 @@ def arm_block(ref_side: Path, test_side: Path, test_doc: dict, label: str | None
     return out, warn
 
 
+def params_warning(ref_side: Path, test_side: Path) -> list[str]:
+    """The task deltas mean little when the runs sent different --request-param (e.g. reasoning_effort)."""
+    def params(side):
+        try:
+            return json.loads((side / "ENV.json").read_text()).get("request_params") or {}
+        except (OSError, ValueError):
+            return {}
+    r, t = params(ref_side), params(test_side)
+    if r == t:
+        return []
+    return [f"the runs sent different request params (reference: {describe(r) or 'none'}; test: {describe(t) or 'none'}), "
+            "so the task deltas include that change"]
+
+
 def verdicts(arm: dict, gates: dict, ref_tasks: list[dict]) -> dict:
     v = {}
     pct = lambda x: f"{x:+.2f} %"
@@ -124,6 +139,7 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
                              "results file by `qualitybench run` and must be kept with it")
     arm, w = arm_block(rs, ts, test, label, [])
     warn += w
+    warn += params_warning(rs, ts)
     doc = copy.deepcopy(ref)
     key = key or arm_key(test["model"])
     if key == "ref":

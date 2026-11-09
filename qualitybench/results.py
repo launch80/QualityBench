@@ -113,6 +113,10 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
     if quick:
         caveats.insert(0, "Quick run: a fixed tenth of each task's items. Compare it only with other quick runs; "
                           "intervals are about three times wider than a full run's.")
+    if env_raw.get("request_params"):
+        from .proxy import describe
+        caveats.insert(0, (f"Request params on every chat request: {describe(env_raw['request_params'])}. "
+                           "Compare it with runs that used the same params.")[:600])
     if env_raw.get("thinking") == "on":
         caveats.insert(0, "This run had thinking ON (max_tokens at least "
                           f"{env_raw.get('thinking_on_min_max_tokens')}); its scores sit in the thinking-off slot "

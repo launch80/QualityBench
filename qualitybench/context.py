@@ -62,6 +62,7 @@ class Ctx:
     tokenizer: str | None = None
     eval_set: str | None = None
     api_key: str | None = None
+    params: dict = field(default_factory=dict)  # --request-param, merged into every chat request by the proxy
     state: dict = field(default_factory=dict)
 
     # ---- sidecar layout

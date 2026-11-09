@@ -274,3 +274,19 @@ def test_token_cap_caveats_and_no_logprobs_is_submittable(tmp_path):
     assert results.validate_shape(doc) == []  # task scores alone may be submitted
     quiet = results.build(_side(tmp_path / "q", {"caps": {"lcb": {"replies": 200, "length": 1, "reasoning": 0}}}, "off"))
     assert not any("token cap" in c for c in quiet["caveats"])  # under 1%: no caveat
+def test_request_params_parse_nest_and_refuse_pinned_fields():
+    from qualitybench.proxy import describe, parse_params
+    p = parse_params(["reasoning_effort=high", "chat_template_kwargs.reasoning_budget=8192", "x.flag=true", "name=a=b"])
+    assert p == {"reasoning_effort": "high", "chat_template_kwargs": {"reasoning_budget": 8192}, "x": {"flag": True},
+                 "name": "a=b"}
+    assert describe(p) == "reasoning_effort=high, chat_template_kwargs.reasoning_budget=8192, x.flag=true, name=a=b"
+    for bad in ("temperature=0.6", "top_p=0.95", "seed=1", "max_tokens=99", "stop=x", "messages=[]",
+                "chat_template_kwargs.enable_thinking=false", "noequals", "a..b=1"):
+        with pytest.raises(ValueError):
+            parse_params([bad])
+    with pytest.raises(ValueError, match="--thinking-max-tokens"):
+        parse_params(["max_tokens=32768"])
+    with pytest.raises(ValueError, match="already set"):
+        parse_params(["a=1", "a.b=2"])
+    assert main(["run", "--endpoint", "http://127.0.0.1:9", "--model", "m", "--out", "x.json",
+                 "--request-param", "temperature=0.7"]) == 2
