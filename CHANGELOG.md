@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-09)
 
 - **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
   whichever comes last of a bold quantity (`**$132.00**`) and `Answer: N`, else the final sentence's last money
