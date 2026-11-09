@@ -16,7 +16,7 @@ numbers side by side.
 |---|---|---|
 | `gsm8k` | 1319 | final answer in the reply, compared numerically, 0-shot chat (lm-eval prompts) |
 | `ifeval` | 541 | prompt-level strict (lm-eval) |
-| `mmlu_pro` | 1000 | fixed subset over 14 subjects, exact letter (lm-eval) |
+| `mmlu_pro` | 1000 | fixed subset over 14 subjects, exact letter, also when written in markdown (`**(D)**`) (lm-eval) |
 | `humaneval` | 164 | HumanEval+ base + plus tests, sandboxed (evalplus) |
 | `mbpp` | 378 | MBPP+ base + plus tests, sandboxed (evalplus) |
 | `bfcl` | 400 | 4 categories, function calling through the server's tool parser (BFCL) |
