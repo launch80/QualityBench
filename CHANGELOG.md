@@ -1,13 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- **MMLU-Pro finds answers written in markdown.** lm-eval looks for `answer is (D)` or `answer is D`, so a
-  reply ending "the answer is **(D)**" counted as no answer. When lm-eval finds no answer, QualityBench now
-  takes the first letter after "answer is" with the `**`, `_` or `:` around it skipped. A letter lm-eval did
-  find is kept as it is. On a Qwen3.8-27B thinking-on run this moved 3 of 1000 items (82.9% to 83.2%).
-  MMLU-Pro scores from earlier versions are not comparable: rescore both runs, or rerun the older one.
-
 ## 0.3.0 (2026-11-09)
 
 - **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
