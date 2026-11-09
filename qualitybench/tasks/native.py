@@ -61,7 +61,9 @@ def _score_window(client: qhttp.Client, model: str, ids: list[int]):
     pl = r["choices"][0].get("prompt_logprobs")
     if not pl:
         raise TaskFailed("the server returned no prompt_logprobs: logprobs needs vLLM (or a server with the same "
-                         "extension) started with --max-logprobs 64 and speculative decoding off")
+                         "extension) started with --max-logprobs 64 and speculative decoding off. The task scores still count; "
+                         "to skip this task, pass --tasks without logprobs (e.g. "
+                         "--tasks gsm8k,ifeval,mmlu_pro,humaneval,mbpp,bfcl,lcb,needle)")
     L = len(ids)
     tgt = np.empty(L - 1, np.float32)
     tid = np.zeros((L - 1, TOPK), np.int32)

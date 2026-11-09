@@ -45,6 +45,8 @@ Flags L80 does not send by name, but may pass through: `--title`, `--concurrency
   deadline, and marks cut tasks in `partials` instead of dropping them.
 - Environment: `QUALITYBENCH_API_KEY` is the endpoint's bearer key, which never
   arrives as a flag. `QUALITYBENCH_NO_UPDATE_CHECK=1` means L80 owns version alignment.
+  `QUALITYBENCH_CONTAINER=docker|podman` picks the container CLI for the code tasks
+  (default: docker if installed, else podman). (0.3.0)
 
 - `--yes` starts without asking about the estimated time. Without it, a run on
   a terminal asks `Start? [y/N]` (a "no" exits 0 and runs nothing);
@@ -146,9 +148,11 @@ validates it**, minus `$template`, which L80 adds. Requirements:
   localhost, a private address or a `.local` host anywhere in it.
 - `partials` lists every task cut short.
 
-Today the server requires at least one scored task and the `logprobs` block, so a
-run of only `needle` (for example) writes a valid local file that launch80 will not
-accept yet; the tool says so at the end of the run.
+The server requires at least one scored task. The `logprobs` block may be empty: servers
+without vLLM's `prompt_logprobs` extension (llama.cpp, radiance) can submit task scores alone, and
+the page shows perplexity, KLD and top-1 agreement as n/a (QualityBench 0.3.0 adds a caveat saying
+so). A run with no scored task (only `needle`, for example) writes a valid local file that launch80
+will not accept; the tool says so at the end of the run.
 
 The schema itself lives with the server template
 (`lib/artifacts/schemas/bench-qualitybench-v1.ts` in the launch80 repo).

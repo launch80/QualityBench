@@ -55,7 +55,7 @@ class Ctx:
     side: Path = Path(".")
     quick: bool = False
     thinking: str | None = None
-    think_min_tokens: int = 16384
+    think_min_tokens: int = 32768
     concurrency: int = 16
     sandbox: str = "docker"
     deadline: float | None = None

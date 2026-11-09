@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import time
 from datetime import datetime
@@ -25,8 +26,13 @@ def preflight(ctx: Ctx, client: qhttp.Client) -> None:
     log_to(ctx, "warmup + preflight")
     r = client.chat(ctx.model, [{"role": "user", "content": "Reply with the single word OK."}],
                     max_tokens=32 if ctx.thinking != "on" else 4096, temperature=0, log=lambda m: log_to(ctx, m))
-    m = r["choices"][0]["message"]
+    m = dict(r["choices"][0]["message"])
     reasoning = m.get("reasoning") or m.get("reasoning_content")
+    content = m.get("content") or ""
+    if "<think>" in content or "</think>" in content:  # a server with no reasoning parser: thinking inline
+        inline = re.sub(r"(?s)^.*</think>", "", content) if "</think>" in content else ""
+        reasoning = reasoning or content[: len(content) - len(inline)] or content
+        m["content"] = inline.strip()
     log_to(ctx, f"preflight content: {m.get('content')!r} reasoning: {'yes' if reasoning else 'no'}")
     if ctx.thinking is None and reasoning:
         raise TaskFailed("preflight: this model thinks by default, and the harnesses' token limits would cut its "
@@ -83,11 +89,20 @@ def write_env(ctx: Ctx, server_models: dict) -> None:
            **harness.harness_versions(), "sandbox": ctx.sandbox,
            "thinking": ctx.thinking or "server default",
            "thinking_on_min_max_tokens": ctx.think_min_tokens if ctx.thinking == "on" else 0,
-           "evalplus_image": envs.EVALPLUS_IMAGE, "endpoint": ctx.endpoint, "host": socket.gethostname(),
+           "evalplus_image": envs.EVALPLUS_IMAGE, "container": _runtime(ctx), "endpoint": ctx.endpoint, "host": socket.gethostname(),
            "qualitybench": __version__, "server_models": server_models}
     if old.get("date"):
         env["resumed"] = datetime.now().astimezone().isoformat()
     ctx.path("ENV.json").write_text(json.dumps(env, indent=1))
+
+
+def _runtime(ctx: Ctx) -> str | None:
+    if ctx.sandbox == "native":
+        return None
+    try:
+        return envs.container()
+    except SystemExit:
+        return None
 
 
 def run(a) -> int:
@@ -133,6 +148,7 @@ def run(a) -> int:
                 write_env(ctx, models)
                 preflight(ctx, client)
                 est, probe = _estimate(ctx, a, todo, client)
+                px.take_stats()  # the warmup and the speed probe are not part of any task
                 gate = _gate(a, est)
                 if gate is not None:
                     return gate
@@ -169,6 +185,7 @@ def run(a) -> int:
                     emit(t, state="failed")
                     log_to(ctx, f"{t}: FAILED: {e}")
                 finally:
+                    _record_caps(ctx, t, px.take_stats())
                     if tracker:
                         tracker.end(t)
                         tracker.emit()
@@ -215,6 +232,27 @@ def run(a) -> int:
     if interrupted:
         return 130
     return 1 if failed else 0
+
+
+RESUMABLE = ("humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
+
+
+def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
+    """Keep how many of a task's replies hit the token cap (state.json), and say so in the log."""
+    if task not in SCORED or not st["replies"]:
+        return
+    caps = ctx.state.setdefault("caps", {})
+    old = caps.get(task) if task in RESUMABLE else None
+    if old:
+        st = {k: st[k] + old.get(k, 0) for k in st}
+    caps[task] = {**st, "thinking": ctx.thinking or "", "max_tokens": ctx.think_min_tokens if ctx.thinking == "on" else 0}
+    ctx.save_state()
+    if st["length"]:
+        log_to(ctx, f"{task}: {st['length']} of {st['replies']} replies stopped at the token cap (scored as wrong)")
+    if ctx.thinking is None and st["reasoning"]:
+        log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning, but --thinking was "
+                    "not set, so the harnesses' short token limits apply. Rerun with --thinking on "
+                    "--thinking-max-tokens 32768, or --thinking off")
 
 
 def _write(ctx: Ctx, doc: dict, out: Path) -> None:

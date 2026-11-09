@@ -226,7 +226,7 @@ def _stamped(name: str) -> bool:
 def _image(image: str) -> bool:
     try:
         return envs.docker_image_exists(image)
-    except OSError:
+    except (OSError, SystemExit):
         return False
 
 

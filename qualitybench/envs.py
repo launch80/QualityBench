@@ -5,7 +5,9 @@ locked environment under $QUALITYBENCH_HOME (default ~/.cache/qualitybench):
 
   venvs/lmeval   lm-eval 0.4.13, evalplus 0.3.1, transformers (locks/lmeval.txt)
   venvs/bfcl     bfcl-eval 2026.3.23 (locks/bfcl.txt)
-  LiveCodeBench  docker image qualitybench-lcb:28fef95e (docker/lcb), or venvs/lcb with --sandbox native
+  LiveCodeBench  container image qualitybench-lcb:28fef95e (docker/lcb), or venvs/lcb with --sandbox native
+
+Containers run with docker, or podman (QUALITYBENCH_CONTAINER=podman, or when docker is not installed).
   hf/            Hugging Face datasets, fetched at setup so a run never downloads mid-way
 """
 from __future__ import annotations
@@ -22,7 +24,7 @@ from .progress import log
 LCB_REPO = "https://github.com/LiveCodeBench/LiveCodeBench"
 LCB_COMMIT = "28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24"
 LCB_IMAGE = "qualitybench-lcb:28fef95e"
-EVALPLUS_IMAGE = "ganler/evalplus@sha256:26b118098bef281fe8dfe999bf05f1d5b45374b4e6c00161ec0f30592aef4740"
+EVALPLUS_IMAGE = "docker.io/ganler/evalplus@sha256:26b118098bef281fe8dfe999bf05f1d5b45374b4e6c00161ec0f30592aef4740"
 LCB_NATIVE_PINS = ["datasets==3.6.0", "numpy<2.3", "pebble", "tqdm", "openai==1.59.6", "anthropic==0.42.0",
                    "cohere==5.13.6", "google-genai==0.6.0", "mistralai==0.4.2", "together==1.3.14"]
 
@@ -104,8 +106,36 @@ def ensure_lcb_source() -> Path:
     return src
 
 
+def container() -> str:
+    """The container CLI: $QUALITYBENCH_CONTAINER (docker or podman), else docker, else podman."""
+    want = (os.environ.get("QUALITYBENCH_CONTAINER") or "").strip().lower()
+    if want:
+        if want not in ("docker", "podman"):
+            raise SystemExit(f"QUALITYBENCH_CONTAINER={want!r}: want docker or podman")
+        return want
+    for exe in ("docker", "podman"):
+        if shutil.which(exe):
+            return exe
+    raise SystemExit("the code tasks need docker or podman (or --sandbox native on a disposable machine)")
+
+
+def container_run(net: str, mounts: list[tuple[Path, str, str]], extra: list[str] | None = None) -> list[str]:
+    """`<docker|podman> run` as this user, with the given network and bind mounts.
+
+    Rootless podman needs --userns=keep-id so --user uid:gid can write the bind mounts, and SELinux
+    labels off (label=disable) so the container can read them at all.
+    """
+    rt = container()
+    cmd = [rt, "run", "--rm", "--network", net, "--user", f"{os.getuid()}:{os.getgid()}"]
+    if rt == "podman":
+        cmd += ["--userns=keep-id", "--security-opt", "label=disable"]
+    for src, dst, mode in mounts:
+        cmd += ["-v", f"{src}:{dst}:{mode}"]
+    return cmd + (extra or [])
+
+
 def docker_image_exists(image: str) -> bool:
-    return subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0
+    return subprocess.run([container(), "image", "inspect", image], capture_output=True).returncode == 0
 
 
 def ensure_lcb(sandbox: str) -> None:
@@ -131,12 +161,12 @@ def ensure_lcb(sandbox: str) -> None:
     shutil.copy(pkg_file("docker", "lcb", "Dockerfile"), ctx / "Dockerfile")
     shutil.copytree(src, ctx / "src", ignore=shutil.ignore_patterns(".git"))
     log(f"setup: building {LCB_IMAGE}")
-    _run(["docker", "build", "-q", "-t", LCB_IMAGE, ctx])
+    _run([container(), "build", "-q", "-t", LCB_IMAGE, ctx])
 
 
 def ensure_evalplus_image() -> None:
     if not docker_image_exists(EVALPLUS_IMAGE):
-        _run(["docker", "pull", "-q", EVALPLUS_IMAGE])
+        _run([container(), "pull", "-q", EVALPLUS_IMAGE])
 
 
 PREFETCH = r"""
@@ -156,11 +186,7 @@ LCB_PREFETCH = ("from lcb_runner.benchmarks.code_generation import load_code_gen
 
 
 def lcb_docker_base(net: str, mounts: list[tuple[Path, str, str]], extra: list[str] | None = None) -> list[str]:
-    cmd = ["docker", "run", "--rm", "--network", net, "--user", f"{os.getuid()}:{os.getgid()}",
-           "-e", "HOME=/tmp", "-e", "HF_HOME=/hf"]
-    for src, dst, mode in [(home() / "hf", "/hf", "rw"), *mounts]:
-        cmd += ["-v", f"{src}:{dst}:{mode}"]
-    return cmd + (extra or [])
+    return container_run(net, [(home() / "hf", "/hf", "rw"), *mounts], ["-e", "HOME=/tmp", "-e", "HF_HOME=/hf", *(extra or [])])
 
 
 def setup(tasks: list[str], sandbox: str = "docker") -> None:

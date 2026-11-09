@@ -11,6 +11,7 @@ from . import SCHEMA_VERSION, __version__, items, stats
 from .suite import BY_ID, SCORED
 
 MAX_BYTES = 256 * 1024
+CAP_SHARE = 0.01  # a task whose replies hit the token cap this often gets a caveat
 ENV_KEYS = ("date", "model", "precision", "engine", "gpu", "lm_eval", "evalplus", "bfcl_eval", "evalplus_image",
             "sandbox", "thinking_on_min_max_tokens", "endpoint", "host")
 NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
@@ -18,8 +19,9 @@ NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
 BASE_CAVEATS = {
     "lcb": "LiveCodeBench v6 problems may predate the model's training cutoff, so absolute scores may be inflated by "
            "contamination. This affects every run equally.",
-    "gsm8k": "GSM8K is scored by the last number in the reply (0-shot chat). lm-eval's strict '####' format scores "
-             "about 0 for chat models.",
+    "gsm8k": "GSM8K (0-shot chat) is scored by the reply's final answer (\\boxed{} or '####', else the last bold "
+             "quantity or 'Answer:', else the final sentence's last amount), compared numerically, so $7.00 matches 7. "
+             "lm-eval's stock flexible-extract score, kept per item, misreads such replies and reads several points lower.",
     "subsets": "MMLU-Pro is a fixed 1000-question subset and BFCL a 400-item subset of four categories.",
 }
 
@@ -93,6 +95,9 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
     state = json.loads((side / "state.json").read_text()) if (side / "state.json").is_file() else {}
     quick = bool(state.get("quick"))
     model = env_raw["model"]
+    for sd in (side, on_side):
+        if sd is not None:
+            items.regrade_gsm8k(sd)
     tasks = task_rows(side, on_side, on_src)
     env = {k: env_raw[k] for k in ENV_KEYS if env_raw.get(k) is not None}
     caveats = []
@@ -112,6 +117,25 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
         caveats.insert(0, "This run had thinking ON (max_tokens at least "
                           f"{env_raw.get('thinking_on_min_max_tokens')}); its scores sit in the thinking-off slot "
                           "because it has no thinking-off run to pair with.")
+    caps = state.get("caps", {})
+    cap_notes = []
+    for t in SCORED:
+        c = caps.get(t)
+        if t not in ran or not c or not c.get("replies"):
+            continue
+        share = c["length"] / c["replies"]
+        if share >= CAP_SHARE:
+            fix = ("raise --thinking-max-tokens" if c.get("thinking") == "on" else
+                   "use --thinking on (with --thinking-max-tokens) or --thinking off")
+            cap_notes.append(f"{BY_ID[t].label}: {c['length']} of {c['replies']} replies ({share:.0%}) stopped at the "
+                             f"token cap and count as wrong, so this score understates the model; {fix}.")
+    if not env_raw.get("thinking") or env_raw.get("thinking") == "server default":
+        seen = sum(c.get("reasoning", 0) for c in caps.values())
+        if seen:
+            cap_notes.insert(0, f"The model reasoned in {seen} replies, but thinking was left at the server's default, "
+                                "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
+                                "--thinking on or --thinking off.")
+    caveats[:0] = cap_notes
     if "lcb" in ran:
         caveats.append(BASE_CAVEATS["lcb"])
     if "gsm8k" in ran:
@@ -127,6 +151,9 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
         from .tasks.native import logprob_summary
         doc["logprobs"], doc["eval_meta"] = logprob_summary(side / "logprobs.npz")
         hashes["eval-set ids"] = doc["eval_meta"].get("eval_set_sha256")
+    else:
+        caveats.append("No logprobs in this run (not asked for, or the server has no prompt_logprobs, a vLLM "
+                       "extension), so perplexity, KLD and top-1 agreement are n/a. Task scores are unaffected.")
     if (side / "needle.json").is_file():
         nd = json.loads((side / "needle.json").read_text())
         doc["needle"] = {"model": nd.get("model", model)[:200], "summary": nd["summary"], "items": nd["items"]}
@@ -155,10 +182,11 @@ def write(doc: dict, out: Path) -> list[str]:
 
 
 def validate_shape(doc: dict) -> list[str]:
-    """What launch80 would refuse, beyond the schema: the server needs at least one task and one logprob set."""
+    """What launch80 would refuse, beyond the schema: the server needs at least one scored task.
+
+    The logprobs block may be empty (servers without prompt_logprobs); the page shows KLD and perplexity as n/a.
+    """
     probs = []
     if not doc.get("tasks"):
         probs.append("no scored task (launch80 needs at least one of gsm8k, ifeval, mmlu_pro, humaneval, mbpp, bfcl, lcb)")
-    if not doc.get("logprobs"):
-        probs.append("no logprobs set (launch80 needs the logprobs task)")
     return probs
