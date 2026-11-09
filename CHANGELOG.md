@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: the server measurement no longer takes many minutes with `--thinking on`.** It went through the
+  local proxy, which raised its 128-token requests to the thinking floor (`--thinking-max-tokens`), and
+  with `ignore_eos` the server generated all of them. It now talks to the endpoint directly and takes
+  seconds again.
+
 ## 0.3.0 (2026-11-09)
 
 - **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
