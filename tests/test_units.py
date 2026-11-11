@@ -313,3 +313,18 @@ def test_request_params_parse_nest_and_refuse_pinned_fields():
         parse_params(["a=1", "a.b=2"])
     assert main(["run", "--endpoint", "http://127.0.0.1:9", "--model", "m", "--out", "x.json",
                  "--request-param", "temperature=0.7"]) == 2
+
+def test_mmlu_pro_reads_markdown_answers_only_when_lm_eval_found_none(tmp_path):
+    from qualitybench.items import from_lmeval
+    rows = [("Therefore, the answer is **(D)**.", "[invalid]", "D", 0, True),
+            ("The answer is: **D**", "[invalid]", "D", 0, True),
+            ("the answer is _(C)_", "[invalid]", "C", 0, True),
+            ("Therefore, the answer is **(D)**.", "[invalid]", "E", 0, False),
+            ("I am not sure.", "[invalid]", "A", 0, False),
+            ("the answer is Freddie Mac, so the answer is (H)", "F", "H", 0, False),  # lm-eval's letter stands
+            ("the answer is (B)", "B", "B", 1, True)]
+    f = tmp_path / "samples_mmlu_pro_law.jsonl"
+    f.write_text("".join(json.dumps({"doc_id": i, "filter": "custom-extract", "resps": [[reply]], "filtered_resps": [got],
+                                     "target": want, "exact_match": em}) + "\n"
+                         for i, (reply, got, want, em, _) in enumerate(rows)))
+    assert [r["correct"] for r in from_lmeval(f, "mmlu_pro_law")] == [r[4] for r in rows]

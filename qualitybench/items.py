@@ -5,6 +5,7 @@ import glob
 import re
 import json
 import os
+import re
 from pathlib import Path
 
 LMEVAL_PICK = {"gsm8k": ("flexible-extract", "exact_match"), "ifeval": ("none", "prompt_level_strict_acc"),
@@ -70,6 +71,21 @@ def _reply(d: dict) -> str:
         r = r[0] if r else ""
     return r or ""
 
+# lm-eval's MMLU-Pro pattern is 'answer is \(?([A-J])\)?', so "the answer is **(D)**" has no answer.
+_MMLU_MARKDOWN = re.compile(r"answer is[\s:*_]*\(?[\s*_]*([A-J])\b")
+
+
+def mmlu_pro_correct(d: dict) -> bool:
+    """lm-eval's letter when it found one; when it found none, the first letter after "answer is" once the
+    markdown around it (**, _, a colon) is skipped."""
+    if d["filtered_resps"][0] != "[invalid]":
+        return bool(d["exact_match"])
+    m = _MMLU_MARKDOWN.search(_reply(d))
+    return bool(m) and m.group(1) == str(d["target"])
+
+
+
+
 
 def from_lmeval(samples: Path, task: str) -> list[dict]:
     flt, metric = LMEVAL_PICK["mmlu_pro" if task.startswith("mmlu_pro") else task]
@@ -82,6 +98,8 @@ def from_lmeval(samples: Path, task: str) -> list[dict]:
         if task == "gsm8k":
             rec = {"id": rec["id"], "correct": grade_gsm8k(_reply(d), str(d["target"])), "stock": rec["correct"],
                    "grader": GSM8K_GRADER}
+        elif task.startswith("mmlu_pro"):
+            rec["correct"] = mmlu_pro_correct(d)
         out.append(rec)
     return out
 
