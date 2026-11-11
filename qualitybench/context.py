@@ -117,6 +117,7 @@ class Ctx:
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd,
                                  start_new_session=True, text=True, errors="replace", bufsize=1)
             hit = threading.Event()
+            last = ""
 
             def watchdog():
                 while p.poll() is None:
@@ -130,6 +131,7 @@ class Ctx:
             try:
                 for line in p.stdout:
                     lf.write(line)
+                    last = line.strip() or last
                     if counter is not None and shared is not None and counter.search(line):
                         with _count_lock:
                             shared["done"] = shared.get("done", 0) + 1
@@ -147,7 +149,9 @@ class Ctx:
                 raise KeyboardInterrupt()
             raise DeadlineHit()
         if p.returncode != 0:
-            raise TaskFailed(f"{Path(cmd[0]).name} exited with status {p.returncode} (see {self.side.name}/run.log)")
+            e = TaskFailed(f"{Path(cmd[0]).name} exited with status {p.returncode} (see {self.side.name}/run.log)")
+            e.last = last  # the last line it printed, often the reason
+            raise e
 
     def sh_many(self, cmds: list[list], task: str, parallel: int, **kw) -> None:
         """Run commands side by side, at most `parallel` at a time; the first failure is raised after all stop."""

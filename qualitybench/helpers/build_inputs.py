@@ -21,9 +21,30 @@ ap.add_argument("--depths", type=int, default=10); ap.add_argument("--seqlen", t
 a = ap.parse_args()
 os.makedirs(a.out, exist_ok=True)
 
-from huggingface_hub import hf_hub_download
+from huggingface_hub import auth_check, get_token, hf_hub_download
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 from transformers import AutoTokenizer
 
+
+def check_repo(repo):
+    """Say plainly why a Hub tokenizer cannot load; the last line printed becomes the task's failure."""
+    if os.path.isdir(repo):
+        return
+    try:
+        auth_check(repo)
+    except GatedRepoError:
+        who = "your HF_TOKEN has no access to it" if get_token() else "no HF_TOKEN is set"
+        raise SystemExit(f"tokenizer: {repo} is a gated Hugging Face repo and {who}. Accept its terms at "
+                         f"https://huggingface.co/{repo}, then export HF_TOKEN=hf_..., or pass --tokenizer with a "
+                         "local dir holding its tokenizer files")
+    except RepositoryNotFoundError:
+        raise SystemExit(f"tokenizer: {repo} is neither a local dir nor a Hugging Face repo you can read "
+                         "(a private repo needs HF_TOKEN)")
+    except Exception:  # offline or the Hub is down: let transformers try its cache
+        pass
+
+
+check_repo(a.tokenizer)
 tok = AutoTokenizer.from_pretrained(a.tokenizer)
 C4 = lambda: hf_hub_download("allenai/c4", "en/c4-validation.00001-of-00008.json.gz", repo_type="dataset")
 L = a.seqlen

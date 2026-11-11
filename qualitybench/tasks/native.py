@@ -41,6 +41,14 @@ def ensure_inputs(ctx: Ctx, what: str) -> Path:
             ctx.sh([envs.venv_python("lmeval"), envs.pkg_file("helpers", "build_inputs.py"), "--tokenizer", tok,
                     "--out", d, "--what", what], "logprobs" if what == "evalset" else "needle", env=envs.harness_env())
         except TaskFailed as e:
+            why = getattr(e, "last", "")
+            if why.startswith("tokenizer: "):
+                why = why.removeprefix("tokenizer: ")
+                if not ctx.tokenizer:
+                    why += ". It came from the model id; pass --tokenizer <HF repo or local dir>"
+                raise TaskFailed(f"{why} (see {ctx.side.name}/run.log)")
+            if ctx.tokenizer:
+                raise TaskFailed(f"{e}. It failed building inputs for --tokenizer {tok}")
             raise TaskFailed(f"{e}. The tokenizer comes from --tokenizer, else the model id ({tok}); pass "
                              "--tokenizer <HF repo or local dir> if the served name is not a Hugging Face repo")
     return f
