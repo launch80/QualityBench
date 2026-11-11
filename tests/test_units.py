@@ -121,7 +121,7 @@ def test_parity_compare():
 def test_cli_version_and_usage(capsys):
     with pytest.raises(SystemExit) as e:
         main(["--version"])
-    assert e.value.code == 0 and capsys.readouterr().out.strip() == "0.3.0"
+    assert e.value.code == 0 and capsys.readouterr().out.strip() == "0.4.0"
     with pytest.raises(SystemExit) as e:
         main(["run", "--endpoint", "x"])
     assert e.value.code == 2

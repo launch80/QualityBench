@@ -16,7 +16,7 @@ numbers side by side.
 |---|---|---|
 | `gsm8k` | 1319 | final answer in the reply, compared numerically, 0-shot chat (lm-eval prompts) |
 | `ifeval` | 541 | prompt-level strict (lm-eval) |
-| `mmlu_pro` | 1000 | fixed subset over 14 subjects, exact letter (lm-eval) |
+| `mmlu_pro` | 1000 | fixed subset over 14 subjects, exact letter, also when written in markdown (`**(D)**`) (lm-eval). See [MMLU-Pro scores from 0.3.0 and earlier](#mmlu-pro-scores-from-030-and-earlier) |
 | `humaneval` | 164 | HumanEval+ base + plus tests, sandboxed (evalplus) |
 | `mbpp` | 378 | MBPP+ base + plus tests, sandboxed (evalplus) |
 | `bfcl` | 400 | 4 categories, function calling through the server's tool parser (BFCL) |
@@ -31,7 +31,7 @@ re-scoring that study's per-item files with this package reproduces its publishe
 ## Install
 
 ```bash
-uv tool install git+https://github.com/launch80/QualityBench@v0.3.0
+uv tool install git+https://github.com/launch80/QualityBench@v0.4.0
 qualitybench setup            # one time: harness environments, the LCB image, datasets
 ```
 
@@ -179,6 +179,20 @@ threshold file's sha256 is recorded in the output.
 
 Both runs must use the same tier and tokenizer. Compare refuses logprobs scored on different eval sets, and
 it skips any task whose two runs answered different items.
+
+### MMLU-Pro scores from 0.3.0 and earlier
+
+The MMLU-Pro grader changed after 0.3.0. lm-eval looks for `answer is (D)` or `answer is D`, so a reply
+ending "the answer is **(D)**" used to count as no answer. When lm-eval finds no answer, QualityBench now
+takes the first letter after "answer is", skipping the `**`, `_` or `:` around it. A letter lm-eval did find
+is kept. On a Qwen3.8-27B thinking-on run this moved 3 of 1000 items (82.9% to 83.2%). Verbose and thinking
+models may move more.
+
+**MMLU-Pro scores from QualityBench 0.3.0 and earlier are not comparable with scores from later versions.**
+A newer run gets a small edge that is not a real quality difference. If you published results made with
+0.3.0 or earlier, please retest with the current version and republish, so that your numbers compare fairly
+with new runs. Until then, compare a 0.3.0 run only with other 0.3.0 runs. The version that made a run is in
+its `<name>.qb/ENV.json` (`qualitybench`).
 
 ## How it keeps runs honest
 

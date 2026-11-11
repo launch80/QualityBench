@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0 (2026-11-11)
+
+- **MMLU-Pro reads answers written in markdown.** lm-eval looks for `answer is (D)` or `answer is D`, so a
+  reply ending "the answer is **(D)**" counted as no answer. When lm-eval finds no answer, QualityBench now
+  takes the first letter after "answer is", skipping the `**`, `_` or `:` around it. A letter lm-eval did find
+  is kept as it is. On a Qwen3.8-27B thinking-on run this moved 3 of 1000 items (82.9% to 83.2%).
+  **MMLU-Pro scores from 0.3.0 and earlier are not comparable with 0.4.0 scores.** If you published results
+  made with 0.3.0 or earlier, please retest with 0.4.0 and republish. The README explains why.
+- **`--request-param KEY=VALUE`** adds a field to every chat request through the proxy, e.g.
+  `reasoning_effort=high` or `chat_template_kwargs.reasoning_budget=8192`. Dotted keys nest and values parse
+  as JSON. Sampling, token-limit and request-shape fields are refused. The params are part of the run (a
+  resume with other params is refused), kept in `<name>.qb/ENV.json`, shown as a caveat in the results, and
+  `compare` warns when two runs differ. `estimate` takes the flag too.
+- **Fix: the server measurement no longer takes minutes with `--thinking on`.** It went through the proxy,
+  which raised its 128-token requests to the thinking floor. It now talks to the endpoint directly.
+- **Tokenizer failures say why.** When the logprobs or needle inputs can't be built because the tokenizer repo
+  is gated (with or without `HF_TOKEN`) or isn't a repo at all, the failure now says so. The README explains
+  when `--tokenizer` is needed.
+
+Thanks to @tomaszzmuda for the MMLU-Pro, `--request-param`, probe and tokenizer changes (#4, #5, #6, #7).
+
 ## 0.3.0 (2026-11-09)
 
 - **GSM8K grading.** GSM8K is now scored by the reply's final answer: the last `\boxed{}` or `#### N`, else
