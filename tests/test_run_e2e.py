@@ -152,8 +152,11 @@ def test_thinking_preflight(home, tmp_path):
         fake.reasoning = True
         assert run(fake, tmp_path / "r.json", "--thinking", "on") == 0
         chat = [r[2] for r in fake.requests if r[1].endswith("/chat/completions")]
-        assert all(b["chat_template_kwargs"]["enable_thinking"] is True for b in chat)
+        probe = [b for b in chat if "chat_template_kwargs" not in b]  # the speed probe goes to the server directly
+        chat = [b for b in chat if "chat_template_kwargs" in b]
+        assert chat and all(b["chat_template_kwargs"]["enable_thinking"] is True for b in chat)
         assert all(b["max_tokens"] >= 32768 for b in chat)
+        assert probe and all(b["max_tokens"] <= 128 for b in probe)  # never raised to the thinking floor
     finally:
         fake.close()
 

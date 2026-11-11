@@ -270,7 +270,10 @@ def _estimate(ctx: Ctx, a, todo: list[str], client: qhttp.Client) -> tuple[dict,
         if probe is None:
             log_to(ctx, "measuring the server for the time estimate")
             try:
-                probe = qest.probe(client, ctx.model, concurrency=min(16, ctx.concurrency))
+                # Straight to the server, not through the proxy: with --thinking on the proxy raises every
+                # max_tokens to the thinking floor, and with ignore_eos the 128-token probe ran for that long.
+                direct = qhttp.Client(ctx.endpoint, ctx.api_key, attempts=1)
+                probe = qest.probe(direct, ctx.model, concurrency=min(16, ctx.concurrency))
             except (OSError, qhttp.HTTPError, ValueError) as e:
                 warn = f"could not measure the server ({str(e)[:160]}); the estimate uses the reference run"
             else:
