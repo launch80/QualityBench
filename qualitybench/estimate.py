@@ -2,7 +2,7 @@
 
 Three sources, best first:
 
-- history: earlier runs of this model with the same thinking setting (``timings.jsonl`` in the
+- history: earlier runs of this model with the same thinking setting and --request-param (``timings.jsonl`` in the
   QualityBench home). Their per-task wall time, scaled by item count and, when both runs were
   probed, by the probe speeds.
 - probe: a short speed test of the server (16 parallel chats plus one long prefill), compared with
@@ -71,7 +71,7 @@ def timings_path() -> Path:
     return envs.home() / "timings.jsonl"
 
 
-def load_history(model: str, thinking: str | None) -> list[dict]:
+def load_history(model: str, thinking: str | None, params: dict | None = None) -> list[dict]:
     p = timings_path()
     if not p.is_file():
         return []
@@ -82,17 +82,18 @@ def load_history(model: str, thinking: str | None) -> list[dict]:
             r = json.loads(line)
         except ValueError:
             continue
-        if r.get("model") == model and r.get("thinking") == want:
+        if r.get("model") == model and r.get("thinking") == want and (r.get("request_params") or {}) == (params or {}):
             out.append(r)
     return out
 
 
 def record_timings(model: str, thinking: str | None, quick: bool, tasks: dict, probe: dict | None,
-                   estimate: dict | None, notes: dict | None = None) -> None:
+                   estimate: dict | None, notes: dict | None = None, params: dict | None = None) -> None:
     """Append one run's per-task wall times. Local only; never published."""
     rec = {"date": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "model": model, "thinking": thinking or "server default",
            "quick": quick, "tasks": tasks, "probe": probe,
-           "estimate_min": (estimate or {}).get("total_min"), **({"notes": notes} if notes else {})}
+           "estimate_min": (estimate or {}).get("total_min"), **({"notes": notes} if notes else {}),
+           **({"request_params": params} if params else {})}
     p = timings_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a") as f:
@@ -232,8 +233,8 @@ def _image(image: str) -> bool:
 
 # --- the estimate ----------------------------------------------------------------------------------
 def estimate(tasks: list[str], quick: bool, thinking: str | None, model: str, probe_result: dict | None,
-             sandbox: str = "docker", history: list[dict] | None = None) -> dict:
-    hist = load_history(model, thinking) if history is None else history
+             sandbox: str = "docker", history: list[dict] | None = None, params: dict | None = None) -> dict:
+    hist = load_history(model, thinking, params) if history is None else history
     rows, sources = [], set()
     for t in tasks:
         n = items_for(t, quick)

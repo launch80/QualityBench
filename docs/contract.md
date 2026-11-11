@@ -23,7 +23,7 @@ qualitybench tasks [--json]
 
 Flags L80 does not send by name, but may pass through: `--title`, `--concurrency N`
 (default 16), `--sandbox docker|native`, `--tokenizer`, `--eval-set`, `--arm`,
-`--arm-label`, `--thinking-max-tokens`.
+`--arm-label`, `--thinking-max-tokens`, `--request-param KEY=VALUE` (repeatable).
 
 - `--reference REF.json`: when the reference is the same model with thinking off
   and this run has `--thinking on`, the two are paired task by task (`on`/`paired`).
@@ -31,6 +31,11 @@ Flags L80 does not send by name, but may pass through: `--title`, `--concurrency
   holds the combined document and this run's own results go to `<name>.qb/run.json`.
   The reference's `<ref>.qb/` folder must sit next to it.
 - `--note precision=…`, `engine=…` and `gpu=…` fill `env`; other notes become caveats.
+- `--request-param KEY=VALUE` adds a field to every `/chat/completions` request
+  (dotted keys nest; values parse as JSON when they can). Sampling, token-limit and
+  request-shape fields are refused with exit 2. The params are part of the run's
+  identity, kept in `<name>.qb/ENV.json` as `request_params`, and published as a
+  caveat, since `env` has no field for them. `compare` warns when two runs differ.
 - `run` installs the harness environments it needs on first use (`setup` does it
   ahead of time); a run without network after setup needs no downloads.
 

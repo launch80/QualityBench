@@ -65,6 +65,7 @@ Useful options:
 | `--tasks gsm8k,ifeval` | a subset of the suite (`qualitybench tasks` lists ids) |
 | `--thinking on\|off` | forces thinking through a local proxy and checks that reasoning is present or absent |
 | `--thinking-max-tokens 32768` | with `--thinking on`, every reply may use at least this many tokens (default 32768) |
+| `--request-param reasoning_effort=high` | adds a field to every chat request, such as a reasoning effort or a chat-template option. See [Request params](#request-params) |
 | `--deadline 6h` | starts no work after the deadline; cut tasks are listed in `partials`, not dropped |
 | `--reference ref.json` | also compares this run with a reference run; `--out` then holds the comparison |
 | `--note precision=INT4 --note engine="vLLM 0.30" --note gpu="RTX PRO 6000"` | labels for the report |
@@ -91,6 +92,33 @@ qualitybench run --endpoint http://127.0.0.1:8000/v1 --model vllm --tokenizer ~/
 The inputs are cached under the exact `--tokenizer` value, so pass the same value to runs you will compare.
 
 The endpoint's bearer key goes in `QUALITYBENCH_API_KEY`, never on the command line.
+
+### Request params
+
+`--request-param KEY=VALUE` adds a field to every chat request through the local proxy. Use it for server
+options that change how the model thinks, such as a reasoning effort, without restarting the server. Repeat
+it for several fields. A dotted key nests, and a value is parsed as JSON when it can be (`8192` is a number,
+`true` a boolean), else it is sent as text.
+
+```bash
+# vLLM started with --reasoning-effort medium --reasoning-effort-map high=xhigh: run this one at xhigh
+qualitybench run ... --thinking on --request-param reasoning_effort=high --thinking-max-tokens 32768
+
+# a chat-template option
+qualitybench run ... --request-param chat_template_kwargs.reasoning_budget=8192
+```
+
+Only chat requests change. The logprobs task's `/v1/completions` requests are sent as they are.
+
+Sampling stays pinned, because runs compare item by item only under greedy decoding with seed 608. So
+`temperature`, `top_p`, `top_k`, `min_p`, `seed`, the penalties, `max_tokens` and fields each task sets
+itself (`messages`, `stop`, `tools`, ...) are refused. `chat_template_kwargs.enable_thinking` is refused too:
+use `--thinking`. A higher reasoning effort writes longer reasoning, so raise `--thinking-max-tokens` with
+it. A reply cut off before its answer is scored wrong.
+
+The params are part of the run: resuming with other params is refused. They are kept in `<name>.qb/ENV.json`,
+listed in the report's notes, and `compare` warns when the two runs sent different ones. The time estimate
+uses only earlier runs with the same params.
 
 ### How long it will take
 

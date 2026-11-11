@@ -34,6 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
                                                              "(default: the server's own default)")
     r.add_argument("--thinking-max-tokens", type=int, default=32768,
                    help="max_tokens floor with --thinking on (32768; thinking models can spend 10-30k tokens on hard code)")
+    r.add_argument("--request-param", action="append", default=[], metavar="KEY=VALUE",
+                   help="add a field to every chat request, e.g. reasoning_effort=high or chat_template_kwargs.x=1 "
+                        "(dotted keys nest; values parse as JSON when they can). Sampling and token limits stay pinned")
     r.add_argument("--reference", help="results file of a reference run: also compare against it (KLD, paired "
                                        "deltas, thresholds); --out then holds the comparison")
     r.add_argument("--thresholds", help="thresholds markdown table (default: the built-in bars)")
@@ -62,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--quick", action="store_true")
     e.add_argument("--tasks", help="comma list of task ids (default: every default task)")
     e.add_argument("--thinking", choices=["on", "off"])
+    e.add_argument("--request-param", action="append", default=[], metavar="KEY=VALUE",
+                   help="as for run: history counts only runs with the same params")
     e.add_argument("--sandbox", choices=["docker", "native"], default="docker")
     e.add_argument("--no-probe", action="store_true", help="don't measure the server")
     e.add_argument("--json", action="store_true", help="print one JSON object")
@@ -104,16 +109,18 @@ def main(argv: list[str] | None = None) -> int:
         import os
 
         from . import estimate as qest
+        from .proxy import parse_params
         from .suite import parse_tasks
         try:
             tasks = parse_tasks(a.tasks)
+            params = parse_params(a.request_param)
         except ValueError as ex:
             print(f"qualitybench: error: {ex}", file=sys.stderr)
             return 2
         probe, warn = None, None
         if a.endpoint and not a.no_probe:
             probe, warn = qest.measure(a.endpoint, a.model, os.environ.get("QUALITYBENCH_API_KEY"))
-        doc = qest.estimate(tasks, a.quick, a.thinking, a.model, probe, a.sandbox)
+        doc = qest.estimate(tasks, a.quick, a.thinking, a.model, probe, a.sandbox, params=params)
         if warn:
             doc["warning"] = warn
         print(json.dumps(doc) if a.json else "\n".join(qest.summary(doc)))
@@ -146,10 +153,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {out} and {html}")
         return 0
     if a.cmd == "run":
+        from .proxy import parse_params
         from .runner import run
         from .suite import parse_tasks
         try:
             parse_tasks(a.tasks)
+            parse_params(a.request_param)
             from .context import parse_deadline
             parse_deadline(a.deadline)
         except ValueError as e:

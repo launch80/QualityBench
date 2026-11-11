@@ -297,6 +297,23 @@ def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
         native.ensure_inputs(Ctx(model="vllm", endpoint="x", side=tmp_path / "r.qb", tokenizer="org/m"), "evalset")
 
 
+def test_request_params_parse_nest_and_refuse_pinned_fields():
+    from qualitybench.proxy import describe, parse_params
+    p = parse_params(["reasoning_effort=high", "chat_template_kwargs.reasoning_budget=8192", "x.flag=true", "name=a=b"])
+    assert p == {"reasoning_effort": "high", "chat_template_kwargs": {"reasoning_budget": 8192}, "x": {"flag": True},
+                 "name": "a=b"}
+    assert describe(p) == "reasoning_effort=high, chat_template_kwargs.reasoning_budget=8192, x.flag=true, name=a=b"
+    for bad in ("temperature=0.6", "top_p=0.95", "seed=1", "max_tokens=99", "stop=x", "messages=[]",
+                "chat_template_kwargs.enable_thinking=false", "noequals", "a..b=1"):
+        with pytest.raises(ValueError):
+            parse_params([bad])
+    with pytest.raises(ValueError, match="--thinking-max-tokens"):
+        parse_params(["max_tokens=32768"])
+    with pytest.raises(ValueError, match="already set"):
+        parse_params(["a=1", "a.b=2"])
+    assert main(["run", "--endpoint", "http://127.0.0.1:9", "--model", "m", "--out", "x.json",
+                 "--request-param", "temperature=0.7"]) == 2
+
 def test_mmlu_pro_reads_markdown_answers_only_when_lm_eval_found_none(tmp_path):
     from qualitybench.items import from_lmeval
     rows = [("Therefore, the answer is **(D)**.", "[invalid]", "D", 0, True),
