@@ -69,8 +69,27 @@ Useful options:
 | `--deadline 6h` | starts no work after the deadline; cut tasks are listed in `partials`, not dropped |
 | `--reference ref.json` | also compares this run with a reference run; `--out` then holds the comparison |
 | `--note precision=INT4 --note engine="vLLM 0.30" --note gpu="RTX PRO 6000"` | labels for the report |
-| `--tokenizer org/repo` | the tokenizer for logprobs and needle, if the served name is not a Hugging Face repo |
+| `--tokenizer org/repo` | the model's tokenizer (Hugging Face repo or local dir) for logprobs and needle. Needed whenever `--model` is not a Hugging Face repo id |
 | `--sandbox native` | runs model code directly on this machine. Use it only on a disposable box without docker |
+
+logprobs and needle tokenize their fixed inputs on this machine, so they need the model's tokenizer. They
+load it from `--tokenizer`, else from `--model`. A short served name (vLLM `--served-model-name my-model`) is
+not a repo, so both tasks fail unless you pass `--tokenizer` with the Hugging Face repo, or with a local folder
+holding the tokenizer files copied from the server's model folder (`tokenizer.json`, `tokenizer_config.json`,
+`config.json`). Only those files are downloaded, never the weights. For a gated or private repo, accept its
+terms on Hugging Face and `export HF_TOKEN=hf_...` before the run. A `huggingface-cli login` is not seen,
+because the harnesses use their own Hugging Face home.
+
+```bash
+# server: vllm serve my-org/My-Model-27B-FP8 --served-model-name vllm ...
+qualitybench run --endpoint http://127.0.0.1:8000/v1 --model vllm --tokenizer my-org/My-Model-27B-FP8 --out results/fp8.json
+
+# or, from a local copy of the tokenizer files
+scp 'server:/models/My-Model-27B-FP8/{tokenizer.json,tokenizer_config.json,config.json}' ~/tok/my-model/
+qualitybench run --endpoint http://127.0.0.1:8000/v1 --model vllm --tokenizer ~/tok/my-model --out results/fp8.json
+```
+
+The inputs are cached under the exact `--tokenizer` value, so pass the same value to runs you will compare.
 
 The endpoint's bearer key goes in `QUALITYBENCH_API_KEY`, never on the command line.
 
