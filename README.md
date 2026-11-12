@@ -120,6 +120,30 @@ The params are part of the run: resuming with other params is refused. They are 
 listed in the report's notes, and `compare` warns when the two runs sent different ones. The time estimate
 uses only earlier runs with the same params.
 
+### Output tokens
+
+The proxy records `usage.completion_tokens` from every chat reply, for the scored tasks (not logprobs, needle
+or spec_parity). The mean and median per task are shown as one caveat in the report's Notes, as a line in
+the run log at each task's end, and by `compare`. Thinking models differ a lot in tokens spent for the same
+score: two quantized builds, or a "swift" and a "thinking-cap" variant, can match on accuracy while one
+writes half the tokens, and tokens are wall time. Greedy decoding on fixed items makes the medians
+comparable between runs. The mean is pulled up by replies cut at the token cap (the cap caveat says how
+many); the median is not. The counts are whatever the server reports, which on most servers includes the
+reasoning tokens, and there is no reasoning/answer split. Compare quants on the same engine, and treat
+numbers across engines with care.
+
+```
+  gsm8k: +0.30 pts (95% CI -0.80 to +1.40, McNemar p 0.62)
+    tokens/reply: mean 1,234 -> 987 (-20%), median 900 -> 780 (-13%)
+```
+
+The percent is the test run against the reference. When only one of the two runs has counts for a task (the
+other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted), `compare`
+warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it. When a thinking-on run
+is paired with its thinking-off reference (`--thinking on --reference`), the caveat lists both, e.g.
+`GSM8K off 310 (310), on 4,633 (2,500)`. A task's counts are published only when every item's reply was
+counted, so a run resumed from a 0.4.0 `state.json`, or after a kill, has none for the tasks it resumed.
+
 ### How long it will take
 
 These runs take a while: about 2h40 for the full suite on a 27B INT4 model on one Arc Pro B65. Before the
@@ -172,10 +196,10 @@ qualitybench compare results/bf16.json results/int4.json --thresholds my-thresho
 ```
 
 This prints KLD, top-1 agreement, the perplexity change and a paired accuracy change per task (exact McNemar
-p plus a paired-bootstrap 95% CI), then a verdict per threshold. It writes `int4-vs-bf16.json` and `.html`:
-the reference's page with the test run drawn as an arm. Without `--thresholds`, compare uses the
-[default bars](qualitybench/data/thresholds-default.md), which are the study's pre-registered ones. Each
-threshold file's sha256 is recorded in the output.
+p plus a paired-bootstrap 95% CI), the change in output tokens per reply, then a verdict per threshold. It
+writes `int4-vs-bf16.json` and `.html`: the reference's page with the test run drawn as an arm. Without
+`--thresholds`, compare uses the [default bars](qualitybench/data/thresholds-default.md), which are the
+study's pre-registered ones. Each threshold file's sha256 is recorded in the output.
 
 Both runs must use the same tier and tokenizer. Compare refuses logprobs scored on different eval sets, and
 it skips any task whose two runs answered different items.

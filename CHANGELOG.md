@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Output tokens per reply.** The proxy now records each chat reply's `usage.completion_tokens` as the
+  server reported it, for the scored tasks, in `<name>.qb/state.json`. A task's counts are published only
+  when every item's reply was counted, so a resumed task has none unless the whole task ran in one go. The
+  results schema is unchanged: mean and median per task travel as one caveat, shown under Notes in the
+  report, and each task's end logs a line such as
+  `gsm8k: 1319 replies, 1,234 output tokens per reply (mean), 987 (median)`. `compare` prints the change
+  under each task line and adds one caveat per arm. When only one of the two runs has counts for a task (the
+  other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted),
+  `compare` warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it.
+
 ## 0.4.0 (2026-11-11)
 
 - **MMLU-Pro reads answers written in markdown.** lm-eval looks for `answer is (D)` or `answer is D`, so a
