@@ -12,6 +12,7 @@ from .suite import BY_ID, SCORED
 
 MAX_BYTES = 256 * 1024
 CAP_SHARE = 0.01  # a task whose replies hit the token cap this often gets a caveat
+TOKENS_NOTE = "Output tokens per reply as the server counted them, mean (median): "
 ENV_KEYS = ("date", "model", "precision", "engine", "gpu", "lm_eval", "evalplus", "bfcl_eval", "evalplus_image",
             "sandbox", "thinking_on_min_max_tokens", "endpoint", "host")
 NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
@@ -57,6 +58,29 @@ def task_rows(side: Path, on_side: Path | None = None, on_src: str | None = None
                 row["paired"] = stats.paired(R, T)
         rows.append(row)
     return rows
+
+
+def side_tokens(side: Path) -> dict:
+    """Output tokens per reply (tokens_summary) of each task a run counted them for, from its state.json caps.
+
+    Only tasks with a count for every item (one reply per item in every harness): an older run resumed by this
+    version, or a run killed mid-task and resumed, has counts for part of a task, and those would misstate it.
+    """
+    try:
+        caps = json.loads((side / "state.json").read_text()).get("caps", {})
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for t, c in caps.items():
+        tokens = c.get("tokens") or []
+        if tokens and len(tokens) >= len(items.load(side / "items" / f"{t}.jsonl") or {}):
+            out[t] = stats.tokens_summary(tokens)
+    return out
+
+
+def notes_at(caveats: list[str]) -> int:
+    """Where a tokens caveat goes: before the --note caveats, which give way first at the 12-caveat limit."""
+    return next((i for i, c in enumerate(caveats) if c.startswith("Note: ")), len(caveats))
 
 
 _HOME = re.compile(r"(/home/|/Users/|/root/|~/|[A-Za-z]:\\Users\\)")
@@ -140,6 +164,19 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
                                 "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
                                 "--thinking on or --thinking off.")
     caveats[:0] = cap_notes
+    per = lambda s: f"{s['mean']:,} ({s['median']:,})"
+    off, on = side_tokens(side), side_tokens(on_side) if on_side is not None else {}
+    tok = []
+    for r in tasks:
+        t = r["id"]
+        if on_side is None:
+            got = [per(off[t])] if t in off else []
+        else:  # the thinking-on run's counts where its scores are paired with this run's
+            got = ([f"off {per(off[t])}"] if t in off else []) + ([f"on {per(on[t])}"] if t in on and "on" in r else [])
+        if got:
+            tok.append(f"{r['label']} {', '.join(got)}")
+    if tok:
+        caveats.insert(notes_at(caveats), (TOKENS_NOTE + " · ".join(tok))[:600])
     if "lcb" in ran:
         caveats.append(BASE_CAVEATS["lcb"])
     if "gsm8k" in ran:

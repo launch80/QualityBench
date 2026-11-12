@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+import statistics
 
 SEED = 608
 RESAMPLES = 10000
@@ -54,3 +55,10 @@ def paired(ref: dict[str, bool], test: dict[str, bool], resamples: int = RESAMPL
     lo, hi = boots[int(0.025 * resamples)], boots[int(0.975 * resamples) - 1]
     return {"n": n, "delta": 100 * (sum(test.values()) - sum(ref.values())) / n, "ci": [100 * lo, 100 * hi],
             "ref_only": b, "test_only": c, "p": mcnemar_p(b, c)}
+
+
+def tokens_summary(tokens: list[int]) -> dict | None:
+    """Output tokens per reply: how many replies, mean and median rounded to whole tokens. None without any."""
+    if not tokens:
+        return None
+    return {"n": len(tokens), "mean": round(statistics.mean(tokens)), "median": round(statistics.median(tokens))}

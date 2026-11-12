@@ -11,7 +11,7 @@ from pathlib import Path
 
 import sys
 
-from . import __version__, compare, envs, items, report, results
+from . import __version__, compare, envs, items, report, results, stats
 from . import estimate as qest
 from . import http as qhttp
 from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidecar_for
@@ -228,7 +228,7 @@ def run(a) -> int:
                                       test_side=side)
             for w in warn:
                 log_to(ctx, "compare: " + w)
-            for line in compare.summary_lines(doc, doc["gate_arm"]):
+            for line in compare.summary_lines(doc, doc["gate_arm"], ref_side, side):
                 log_to(ctx, line)
     else:
         doc = results.build(side, title=a.title, thresholds=a.thresholds, notes=a.note)
@@ -244,15 +244,18 @@ RESUMABLE = ("humaneval", "mbpp", "lcb")  # a rerun asks only for the missing it
 
 
 def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
-    """Keep how many of a task's replies hit the token cap (state.json), and say so in the log."""
+    """Keep how many of a task's replies hit the token cap and their output tokens (state.json); log both."""
     if task not in SCORED or not st["replies"]:
         return
     caps = ctx.state.setdefault("caps", {})
     old = caps.get(task) if task in RESUMABLE else None
     if old:
-        st = {k: st[k] + old.get(k, 0) for k in st}
+        st = {k: old.get(k, type(v)()) + v for k, v in st.items()}  # caps from 0.4.0 and earlier have no tokens
     caps[task] = {**st, "thinking": ctx.thinking or "", "max_tokens": ctx.think_min_tokens if ctx.thinking == "on" else 0}
     ctx.save_state()
+    if tk := stats.tokens_summary(st["tokens"]):
+        log_to(ctx, f"{task}: {tk['n']} {'reply' if tk['n'] == 1 else 'replies'}, {tk['mean']:,} output tokens per "
+                    f"reply (mean), {tk['median']:,} (median)")
     if st["length"]:
         log_to(ctx, f"{task}: {st['length']} of {st['replies']} replies stopped at the token cap (scored as wrong)")
     if ctx.thinking is None and st["reasoning"]:

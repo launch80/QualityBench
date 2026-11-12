@@ -142,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "compare":
         from . import compare, report, results
+        from .context import sidecar_for
         doc, warn = compare.build(Path(a.ref), Path(a.test), a.thresholds, a.arm, a.arm_label)
         for w in warn:
             print("warning: " + w, file=sys.stderr)
@@ -149,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         for w in results.write(doc, out):
             print("warning: " + w, file=sys.stderr)
         html = report.write(doc, out)
-        print("\n".join(compare.summary_lines(doc, doc["gate_arm"])))
+        lines = compare.summary_lines(doc, doc["gate_arm"], sidecar_for(Path(a.ref)), sidecar_for(Path(a.test)))
+        print("\n".join(lines))
         print(f"wrote {out} and {html}")
         return 0
     if a.cmd == "run":

@@ -274,6 +274,86 @@ def test_token_cap_caveats_and_no_logprobs_is_submittable(tmp_path):
     assert results.validate_shape(doc) == []  # task scores alone may be submitted
     quiet = results.build(_side(tmp_path / "q", {"caps": {"lcb": {"replies": 200, "length": 1, "reasoning": 0}}}, "off"))
     assert not any("token cap" in c for c in quiet["caveats"])  # under 1%: no caveat
+    assert not any("Output tokens" in c for c in quiet["caveats"])  # caps from 0.4.0 and earlier have no tokens
+
+
+def test_tokens_summary_rounds_to_whole_tokens():
+    assert stats.tokens_summary([100, 200, 600]) == {"n": 3, "mean": 300, "median": 200}
+    assert stats.tokens_summary([1, 2, 4, 10]) == {"n": 4, "mean": 4, "median": 3}  # even length: mean of the middle two
+    assert stats.tokens_summary([3, 4]) == {"n": 2, "mean": 4, "median": 4}  # 3.5 rounds to 4
+    assert stats.tokens_summary([]) is None
+
+
+def test_output_tokens_caveat(tmp_path):
+    from qualitybench import results
+    lcb = [1000] * 5 + [2000] * 10 + [6000] * 5  # one count per item (_side writes 20 lcb items)
+    caps = {"lcb": {"replies": 20, "length": 0, "reasoning": 0, "tokens": lcb},
+            "gsm8k": {"replies": 1, "length": 0, "reasoning": 0, "tokens": [50]}}  # gsm8k has no items: not run
+    doc = results.build(_side(tmp_path, {"caps": caps}, "off"))
+    note = "Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 2,750 (2,000)"
+    assert note in doc["caveats"]
+    # 19 counts for 20 items: a reply went uncounted (e.g. a killed run's first attempt), so no stats at all
+    short = {"lcb": {**caps["lcb"], "tokens": lcb[:-1]}}
+    assert not any(c.startswith(results.TOKENS_NOTE) for c in results.build(_side(tmp_path / "s", {"caps": short}, "off"))["caveats"])
+    assert doc["caveats"].index(note) < doc["caveats"].index(results.BASE_CAVEATS["lcb"])
+    full = results.build(_side(tmp_path / "f", {"caps": caps}, "off"), notes=[f"n{i}" for i in range(11)])
+    assert note in full["caveats"] and results.BASE_CAVEATS["lcb"] not in full["caveats"]  # at 12, the base ones go first
+    # before the --note caveats too: with 12 others ahead of it, a note gives way, not the tokens line
+    on = results.build(_side(tmp_path / "o", {"caps": caps}, "on"), notes=[f"n{i}" for i in range(11)])
+    assert on["caveats"][0].startswith("This run had thinking ON") and on["caveats"][1] == note
+    assert on["caveats"][2] == "Note: n0" and len(on["caveats"]) == 12 and "Note: n10" not in on["caveats"]
+    none = {"lcb": {"replies": 3, "length": 0, "reasoning": 0, "tokens": []}}
+    assert not any("Output tokens" in c for c in results.build(_side(tmp_path / "n", {"caps": none}, "off"))["caveats"])
+
+
+def test_output_tokens_caveat_pairs_thinking_off_and_on(tmp_path):
+    from qualitybench import items, results
+    counted = lambda toks: {"replies": len(toks), "length": 0, "reasoning": 0, "tokens": toks}
+    off = _side(tmp_path / "off", {"caps": {"gsm8k": counted([10]), "ifeval": {"replies": 1, "length": 0, "reasoning": 0},
+                                            "lcb": counted([300, 320] * 10)}}, "off")  # 20 lcb items, one count each
+    on = _side(tmp_path / "on", {"caps": {"gsm8k": counted([999]), "ifeval": counted([50]),
+                                          "lcb": counted([2500] * 15 + [11000] * 5)}}, "on")
+    for side, gsm in ((off, "g1"), (on, "g2")):  # gsm8k: other items on the thinking-on side, so not paired
+        items.write(side / "items" / "gsm8k.jsonl", [{"id": gsm, "correct": True}])
+        items.write(side / "items" / "ifeval.jsonl", [{"id": "i1", "correct": True}])
+    doc = results.build(off, on_side=on, on_src="on")
+    assert ("Output tokens per reply as the server counted them, mean (median): GSM8K off 10 (10) · IFEval on 50 (50) · "
+            "LiveCodeBench v6 off 310 (310), on 4,625 (2,500)") in doc["caveats"]
+
+
+def test_pct_change():
+    from qualitybench.compare import _pct
+    assert _pct(800, 1000) == "+25%" and _pct(1000, 800) == "-20%"
+    assert _pct(0, 5) == "n/a"  # no division by a zero reference
+
+
+def test_record_caps_adds_up_resumed_tasks(tmp_path):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import _record_caps
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb", thinking="off")
+    ctx.load_state()
+    was = {"replies": 2, "length": 1, "reasoning": 0, "thinking": "off", "max_tokens": 0}
+    ctx.state["caps"] = {"lcb": {**was, "tokens": [10, 20]}, "gsm8k": {**was, "tokens": [10, 20]},
+                         "mbpp": was,  # caps from 0.4.0: no tokens
+                         "humaneval": {**was, "tokens": []}}  # a server that sent no usage
+    new = lambda: {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60]}
+    for t in ("lcb", "gsm8k", "mbpp", "humaneval"):
+        _record_caps(ctx, t, new())
+    caps = json.loads((tmp_path / "r.qb" / "state.json").read_text())["caps"]
+    assert caps["lcb"] == {"replies": 3, "length": 1, "reasoning": 0, "tokens": [10, 20, 60], "thinking": "off",
+                           "max_tokens": 0}  # a rerun asks only for the missing items
+    assert caps["gsm8k"] == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking": "off", "max_tokens": 0}
+    # kept as counted; results publish a task's counts only if every item's reply has one
+    assert caps["mbpp"]["replies"] == 3 and caps["mbpp"]["tokens"] == [60]
+    assert caps["humaneval"]["replies"] == 3 and caps["humaneval"]["tokens"] == [60]
+    log = (tmp_path / "r.qb" / "run.log").read_text()
+    assert [l.split("] ", 1)[1] for l in log.splitlines() if "output tokens per reply" in l] == [
+        "lcb: 3 replies, 30 output tokens per reply (mean), 20 (median)",
+        "gsm8k: 1 reply, 60 output tokens per reply (mean), 60 (median)",
+        "mbpp: 1 reply, 60 output tokens per reply (mean), 60 (median)",
+        "humaneval: 1 reply, 60 output tokens per reply (mean), 60 (median)"]
+
+
 def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
     # build_inputs.py prints "tokenizer: <why>" as its last line; ensure_inputs makes that the task's failure
     import sys
