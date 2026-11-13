@@ -4,13 +4,19 @@
 
 - **Output tokens per reply.** The proxy now records each chat reply's `usage.completion_tokens` as the
   server reported it, for the scored tasks, in `<name>.qb/state.json`. A task's counts are published only
-  when every item's reply was counted, so a resumed task has none unless the whole task ran in one go. The
-  results schema is unchanged: mean and median per task travel as one caveat, shown under Notes in the
+  when every item's reply was counted; a task resumed after a kill, or from a 0.4.0 `state.json`, has none.
+  The results schema is unchanged: mean and median per task travel as one caveat, shown under Caveats in the
   report, and each task's end logs a line such as
   `gsm8k: 1319 replies, 1,234 output tokens per reply (mean), 987 (median)`. `compare` prints the change
-  under each task line and adds one caveat per arm. When only one of the two runs has counts for a task (the
-  other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted),
-  `compare` warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it.
+  under each task line and adds one caveat for the arm. When only one of the two runs has counts for a task
+  (the other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted),
+  `compare` warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it. When the
+  server also reports `usage.completion_tokens_details.reasoning_tokens` for every reply of a task, the
+  caveat and `compare` add a thinking part. The report gets an "Output tokens per reply" table (mean,
+  median, thinking, and the change against the reference), written to `<name>.qb/tokens.json` so
+  `qualitybench report` redraws it.
+- **`compare` refuses a comparison file as the reference.** Its `.qb` folder is never the reference run's
+  data, so deltas were scored against the wrong run; pass the run's own results file.
 
 ## 0.4.0 (2026-11-11)
 
