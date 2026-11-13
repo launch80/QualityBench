@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: the token-cap caveat no longer tells a `--thinking off` run to use `--thinking off`.** It now says
+  how many of the task's replies reasoned although thinking was off (the server may not honour
+  `enable_thinking`), or, when none did, that the harnesses' own limits (2048 tokens, 4096 for LiveCodeBench)
+  applied. Such a run also gets a caveat and a `run.log` warning counting the replies that reasoned.
+
 ## 0.4.0 (2026-11-11)
 
 - **MMLU-Pro reads answers written in markdown.** lm-eval looks for `answer is (D)` or `answer is D`, so a
