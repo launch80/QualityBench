@@ -68,9 +68,11 @@ class Fake:
                     toks = content.split(" ")
                     lp = [{"token": t, "logprob": -0.1, "top_logprobs": [{"token": t, "logprob": -0.1},
                                                                           {"token": "x", "logprob": -2.5}]} for t in toks]
+                    usage = {"prompt_tokens": len(text) // 4, "completion_tokens": len(toks)}
+                    if fake.reasoning:  # as vLLM with a reasoning parser: the reasoning's share of completion_tokens
+                        usage["completion_tokens_details"] = {"reasoning_tokens": len(msg["reasoning_content"].split())}
                     return self._json({"choices": [{"message": msg, "finish_reason": fake.finish, "logprobs": {"content": lp}}],
-                                       "usage": {"prompt_tokens": len(text) // 4, "completion_tokens": len(toks)}
-                                       if fake.usage is None else fake.usage})
+                                       "usage": usage if fake.usage is None else fake.usage})
                 if self.path.endswith("/completions"):
                     ids = body["prompt"]
                     pl = [None]

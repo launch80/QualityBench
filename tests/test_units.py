@@ -284,6 +284,16 @@ def test_tokens_summary_rounds_to_whole_tokens():
     assert stats.tokens_summary([]) is None
 
 
+def test_tokens_summary_thinking_only_when_every_reply_has_some():
+    plain = {"n": 3, "mean": 300, "median": 200}
+    assert stats.tokens_summary([100, 200, 600], [50, 150, 400]) == {**plain, "thinking": {"mean": 200, "median": 150}}
+    assert stats.tokens_summary([100, 200, 600], [50, 150]) == plain  # not one count per reply
+    assert stats.tokens_summary([100, 200, 600], [50, None, 400]) == plain  # a reply without the server's count
+    assert stats.tokens_summary([100, 200, 600], [0, 0, 0]) == plain  # thinking off
+    assert stats.tokens_summary([100, 200, 600], [0, 0, 9]) == {**plain, "thinking": {"mean": 3, "median": 0}}
+    assert stats.tokens_summary([], []) is None
+
+
 def test_output_tokens_caveat(tmp_path):
     from qualitybench import results
     lcb = [1000] * 5 + [2000] * 10 + [6000] * 5  # one count per item (_side writes 20 lcb items)
@@ -321,10 +331,30 @@ def test_output_tokens_caveat_pairs_thinking_off_and_on(tmp_path):
             "LiveCodeBench v6 off 310 (310), on 4,625 (2,500)") in doc["caveats"]
 
 
+def test_output_tokens_caveat_says_thinking_tokens(tmp_path):
+    from qualitybench import results
+    lcb = {"replies": 20, "length": 0, "reasoning": 20, "tokens": [300, 320] * 10, "thinking_tokens": [200, 220] * 10}
+    one = results.build(_side(tmp_path / "one", {"caps": {"lcb": lcb}}, "on"))
+    assert ("Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 310 (310), "
+            "thinking 210 (210)") in one["caveats"]
+    # the thinking part follows the side it belongs to; the thinking-off run's zeros say nothing
+    off = _side(tmp_path / "off", {"caps": {"lcb": {**lcb, "thinking_tokens": [0] * 20}}}, "off")
+    on = _side(tmp_path / "on", {"caps": {"lcb": {**lcb, "tokens": [2500] * 15 + [11000] * 5,
+                                                  "thinking_tokens": [2100] * 15 + [9300] * 5}}}, "on")
+    pair = results.build(off, on_side=on, on_src="on")
+    assert ("Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 off 310 (310), "
+            "on 4,625 (2,500), thinking 3,900 (2,100)") in pair["caveats"]
+    # caps kept before thinking counts were (tokens only): totals as before
+    old = results.build(_side(tmp_path / "old", {"caps": {"lcb": {k: v for k, v in lcb.items() if k != "thinking_tokens"}}}, "on"))
+    assert "Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 310 (310)" in old["caveats"]
+
+
 def test_pct_change():
     from qualitybench.compare import _pct
     assert _pct(800, 1000) == "+25%" and _pct(1000, 800) == "-20%"
     assert _pct(0, 5) == "n/a"  # no division by a zero reference
+    # halves round away from zero, as the report's table does (Math.floor(|p| + 0.5)), not to even
+    assert _pct(200, 205) == "+3%" and _pct(200, 195) == "-3%" and _pct(200, 203) == "+2%" and _pct(200, 200) == "+0%"
 
 
 def test_record_caps_adds_up_resumed_tasks(tmp_path):
@@ -336,22 +366,30 @@ def test_record_caps_adds_up_resumed_tasks(tmp_path):
     ctx.state["caps"] = {"lcb": {**was, "tokens": [10, 20]}, "gsm8k": {**was, "tokens": [10, 20]},
                          "mbpp": was,  # caps from 0.4.0: no tokens
                          "humaneval": {**was, "tokens": []}}  # a server that sent no usage
-    new = lambda: {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60]}
+    new = lambda: {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking": [40]}
     for t in ("lcb", "gsm8k", "mbpp", "humaneval"):
         _record_caps(ctx, t, new())
     caps = json.loads((tmp_path / "r.qb" / "state.json").read_text())["caps"]
-    assert caps["lcb"] == {"replies": 3, "length": 1, "reasoning": 0, "tokens": [10, 20, 60], "thinking": "off",
+    # "thinking" in caps is the run's --thinking, so the replies' thinking tokens are kept as thinking_tokens,
+    # aligned with tokens: the earlier replies' counts are unknown
+    assert caps["lcb"] == {"replies": 3, "length": 1, "reasoning": 0, "tokens": [10, 20, 60],
+                           "thinking_tokens": [None, None, 40], "thinking": "off",
                            "max_tokens": 0}  # a rerun asks only for the missing items
-    assert caps["gsm8k"] == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking": "off", "max_tokens": 0}
+    assert caps["gsm8k"] == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking_tokens": [40],
+                             "thinking": "off", "max_tokens": 0}
     # kept as counted; results publish a task's counts only if every item's reply has one
-    assert caps["mbpp"]["replies"] == 3 and caps["mbpp"]["tokens"] == [60]
+    assert caps["mbpp"]["replies"] == 3 and caps["mbpp"]["tokens"] == [60] and caps["mbpp"]["thinking_tokens"] == [40]
     assert caps["humaneval"]["replies"] == 3 and caps["humaneval"]["tokens"] == [60]
+    assert caps["humaneval"]["thinking_tokens"] == [40]
     log = (tmp_path / "r.qb" / "run.log").read_text()
     assert [l.split("] ", 1)[1] for l in log.splitlines() if "output tokens per reply" in l] == [
         "lcb: 3 replies, 30 output tokens per reply (mean), 20 (median)",
         "gsm8k: 1 reply, 60 output tokens per reply (mean), 60 (median)",
         "mbpp: 1 reply, 60 output tokens per reply (mean), 60 (median)",
         "humaneval: 1 reply, 60 output tokens per reply (mean), 60 (median)"]
+    _record_caps(ctx, "lcb", new())  # resumed again: both lists grow together
+    caps = json.loads((tmp_path / "r.qb" / "state.json").read_text())["caps"]
+    assert caps["lcb"]["tokens"] == [10, 20, 60, 60] and caps["lcb"]["thinking_tokens"] == [None, None, 40, 40]
 
 
 def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
@@ -408,3 +446,66 @@ def test_mmlu_pro_reads_markdown_answers_only_when_lm_eval_found_none(tmp_path):
                                      "target": want, "exact_match": em}) + "\n"
                          for i, (reply, got, want, em, _) in enumerate(rows)))
     assert [r["correct"] for r in from_lmeval(f, "mmlu_pro_law")] == [r[4] for r in rows]
+
+
+def test_report_tokens_keeps_only_what_it_knows(tmp_path):
+    from qualitybench import results
+    counted = lambda toks: {"caps": {"lcb": {"replies": 20, "length": 0, "reasoning": 0, "tokens": toks}}}
+    ref, test = _side(tmp_path / "ref", counted([300, 320] * 10), "off"), _side(tmp_path / "test", counted([100] * 20), "on")
+    s = lambda m: {"lcb": {"n": 20, "mean": m, "median": m}}
+    assert results.report_tokens({"tasks": [{"id": "lcb"}]}, ref) == {"ref": s(310)}
+    # the thinking-on run's counts only where its scores pair with the reference's, as in the caveat
+    assert results.report_tokens({"tasks": [{"id": "lcb"}]}, ref, on_side=test) == {"ref": s(310), "on": {}}
+    assert results.report_tokens({"tasks": [{"id": "lcb", "on": {}}]}, ref, on_side=test) == {"ref": s(310), "on": s(100)}
+    # the gate arm, on its compared tasks only
+    doc = {"tasks": [{"id": "lcb"}], "gate_arm": "new", "arms": {"old": {"tasks": {"lcb": {}}}, "new": {"tasks": {"lcb": {}}}}}
+    assert results.report_tokens(doc, ref, arm_side=test) == {"ref": s(310), "arms": {"new": s(100)}}
+    doc["arms"]["new"] = {}  # no task compared (e.g. other items)
+    assert results.report_tokens(doc, ref, arm_side=test) == {"ref": s(310), "arms": {"new": {}}}
+
+
+def test_report_embeds_output_tokens_outside_the_document(tmp_path, capsys):
+    import shutil
+    from qualitybench import report, results
+    side = _side(tmp_path, {"caps": {"lcb": {"replies": 20, "length": 0, "reasoning": 0, "tokens": [300, 320] * 10}}}, "off")
+    res = tmp_path / "r.json"
+    results.write(results.build(side), res)
+    doc = json.loads(res.read_text())
+    tokens = {"ref": {"lcb": {"n": 20, "mean": 310, "median": 310}}, "arms": {"q4</script>": {}}}
+    html = report.render(doc, tokens)
+    assert 'const T = {"ref":{"lcb":{"n":20,"mean":310,"median":310}},"arms":{"q4<\\/script>":{}}};' in html
+    assert html.count("</script>") == 1  # the data never ends the script block
+    assert '<section id="s-tokens">' in html and "<h2>Output tokens per reply</h2>" in html
+    assert html.index('id="s-tasks"') < html.index('id="s-tokens"') < html.index('id="s-think"')
+    # the table's column headers: unlabelled for a lone run, else by run ("reference", the arms', thinking off/on)
+    for col in ('"mean"', '"median"', '"thinking mean · median"', '"change"', '"reference"', '"thinking off"', '"thinking on"'):
+        assert col in html
+    assert "const T = null;" in report.render(doc)
+    # write() keeps them next to the results file, so `qualitybench report` draws the same table later
+    report.write(doc, res, tokens=tokens)
+    assert json.loads((tmp_path / "r.qb" / "tokens.json").read_text()) == tokens
+    # no task counted anywhere: no tokens.json (nor a sidecar made for it), and none left from an earlier write
+    report.write(doc, tmp_path / "none.json", tokens={"ref": {}, "on": {}, "arms": {"q4": {}}})
+    assert (tmp_path / "none.html").is_file() and not (tmp_path / "none.qb").exists()
+    report.write(doc, res, tokens={"ref": {}})
+    assert not (tmp_path / "r.qb" / "tokens.json").exists()
+    report.write(doc, res, tokens=tokens)
+    (tmp_path / "r.html").unlink()
+    assert main(["report", str(res)]) == 0
+    assert 'const T = {"ref":{"lcb":{"n":20,"mean":310,"median":310}},"arms":{"q4<\\/script>":{}}};' in (tmp_path / "r.html").read_text()
+    (tmp_path / "r.qb" / "tokens.json").unlink()  # a run from before tokens.json: its own counts, from state.json
+    assert main(["report", str(res)]) == 0
+    assert 'const T = {"ref":{"lcb":{"n":20,"mean":310,"median":310}}};' in (tmp_path / "r.html").read_text()
+    # a comparison or thinking pair: its sidecar's counts may be another run's than the reference's, so none
+    shutil.copytree(side, tmp_path / "p.qb")
+    (tmp_path / "p.qb" / "tokens.json").unlink()
+    (tmp_path / "p.json").write_text(json.dumps({**doc, "think_dirs": ["on"]}))
+    assert main(["report", str(tmp_path / "p.json")]) == 0
+    assert "const T = null;" in (tmp_path / "p.html").read_text()
+    (tmp_path / "p.json").write_text(json.dumps({**doc, "arms": {"q4": {"label": "q4"}}, "gate_arm": "q4"}))
+    assert main(["report", str(tmp_path / "p.json")]) == 0
+    assert "const T = null;" in (tmp_path / "p.html").read_text()
+    # a results file without its sidecar renders without the table
+    (tmp_path / "bare.json").write_text(res.read_text())
+    assert main(["report", str(tmp_path / "bare.json")]) == 0
+    assert "const T = null;" in (tmp_path / "bare.html").read_text() and not (tmp_path / "bare.qb").exists()

@@ -136,9 +136,15 @@ def main(argv: list[str] | None = None) -> int:
         print("setup done")
         return 0
     if a.cmd == "report":
-        from . import report
+        from . import report, results
+        from .context import sidecar_for
         doc = json.loads(Path(a.results).read_text())
-        print(report.write(doc, Path(a.results), Path(a.out) if a.out else None))
+        side = sidecar_for(Path(a.results))
+        # a run's own counts only for its own page: a comparison's or thinking pair's sidecar is not the reference's
+        tokens = (json.loads((side / "tokens.json").read_text()) if (side / "tokens.json").is_file() else
+                  {"ref": results.side_tokens(side)} if (side / "state.json").is_file() and not doc.get("arms")
+                  and not doc.get("think_dirs") else None)
+        print(report.write(doc, Path(a.results), Path(a.out) if a.out else None, tokens))
         return 0
     if a.cmd == "compare":
         from . import compare, report, results
@@ -149,8 +155,9 @@ def main(argv: list[str] | None = None) -> int:
         out = Path(a.out) if a.out else Path(a.test).with_name(f"{Path(a.test).stem}-vs-{Path(a.ref).stem}.json")
         for w in results.write(doc, out):
             print("warning: " + w, file=sys.stderr)
-        html = report.write(doc, out)
-        lines = compare.summary_lines(doc, doc["gate_arm"], sidecar_for(Path(a.ref)), sidecar_for(Path(a.test)))
+        rs, ts = sidecar_for(Path(a.ref)), sidecar_for(Path(a.test))
+        html = report.write(doc, out, tokens=results.report_tokens(doc, rs, arm_side=ts))
+        lines = compare.summary_lines(doc, doc["gate_arm"], rs, ts)
         print("\n".join(lines))
         print(f"wrote {out} and {html}")
         return 0
@@ -165,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
             parse_deadline(a.deadline)
         except ValueError as e:
             print(f"qualitybench: error: {e}", file=sys.stderr)
+            return 2
+        if a.reference and not Path(a.reference).is_file():
+            print(f"qualitybench: error: reference {a.reference} not found", file=sys.stderr)
             return 2
         if a.concurrency < 1:
             print("qualitybench: error: --concurrency must be at least 1", file=sys.stderr)

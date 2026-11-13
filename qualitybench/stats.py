@@ -57,8 +57,15 @@ def paired(ref: dict[str, bool], test: dict[str, bool], resamples: int = RESAMPL
             "ref_only": b, "test_only": c, "p": mcnemar_p(b, c)}
 
 
-def tokens_summary(tokens: list[int]) -> dict | None:
-    """Output tokens per reply: how many replies, mean and median rounded to whole tokens. None without any."""
+def tokens_summary(tokens: list[int], thinking: list[int | None] | None = None) -> dict | None:
+    """Output tokens per reply: how many replies, mean and median rounded to whole tokens. None without any.
+
+    With a thinking count for every reply (`thinking`, aligned with `tokens`) and not all zero, their mean and median too.
+    """
     if not tokens:
         return None
-    return {"n": len(tokens), "mean": round(statistics.mean(tokens)), "median": round(statistics.median(tokens))}
+    mm = lambda v: {"mean": round(statistics.mean(v)), "median": round(statistics.median(v))}
+    out = {"n": len(tokens), **mm(tokens)}
+    if thinking and len(thinking) == len(tokens) and None not in thinking and any(thinking):
+        out["thinking"] = mm(thinking)
+    return out

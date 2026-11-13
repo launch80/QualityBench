@@ -1,4 +1,5 @@
 const D = /*__DATA__*/null;
+const T = /*__TOKENS__*/null;
 const $ = s => document.querySelector(s);
 const NS = "http://www.w3.org/2000/svg";
 const fmt = (v, d = 1) => (v == null || isNaN(v)) ? "–" : Number(v).toFixed(d);
@@ -91,6 +92,25 @@ function tasksChart() {
   table("#t-tasks", head, D.tasks.map(t => [esc(t.label), esc(t.how), `${t.off.k}/${t.off.n} (${fmt(t.off.acc)}%)`, `${fmt(t.off.ci[0])}–${fmt(t.off.ci[1])}`]
     .concat(THINK ? [t.on ? `${t.on.k}/${t.on.n} (${fmt(t.on.acc)}%)` : '<span class="pending">not run</span>', t.on ? `${fmt(t.on.ci[0])}–${fmt(t.on.ci[1])}` : "–"] : [])),
     THINK ? [2, 3, 4, 5] : [2, 3]);
+}
+
+// ---------- output tokens per reply (T: local data from beside the results file, not part of the document)
+function tokensTable() {
+  // a lone run needs no label; the reference and an arm often share a model id, so "reference"
+  const cols = !T ? [] : [[T.on ? "thinking off" : ARMS.length ? "reference" : "", T.ref || {}], ...(T.on ? [["thinking on", T.on]] : []),
+    ...ARMS.filter(([k]) => Object.keys((T.arms || {})[k] || {}).length).map(([k, a]) => [a.label, T.arms[k]])];
+  const rows = D.tasks.filter(t => cols.some(([, c]) => c[t.id]));
+  if (!rows.length) { hide("#s-tokens"); return; }
+  const th = cols.map(([, c]) => rows.some(t => (c[t.id] || {}).thinking));  // a thinking column only where a run has some
+  // as compare._pct: whole percent, halves away from zero
+  const n = v => Number(v).toLocaleString("en-US"), pct = (r, s, p = 100 * (s - r) / r) => `${p >= 0 ? "+" : "-"}${Math.floor(Math.abs(p) + 0.5)}%`;
+  const head = ["Task", ...cols.flatMap(([l], i) => [(l ? `${esc(l)} ` : "") + "mean", "median", ...(th[i] ? ["thinking mean · median"] : []), ...(i ? ["change"] : [])])];
+  table("#t-tokens", head, rows.map(t => [esc(t.label), ...cols.flatMap(([, c], i) => {
+    const s = c[t.id], r = cols[0][1][t.id];
+    const v = s ? [n(s.mean), n(s.median)] : ["–", "–"];
+    if (th[i]) v.push(s && s.thinking ? `${n(s.thinking.mean)} · ${n(s.thinking.median)}` : "–");
+    return i ? [...v, !s ? "–" : r && r.mean && r.median ? `${pct(r.mean, s.mean)} / ${pct(r.median, s.median)}` : "n/a"] : v;
+  })]), head.map((_, i) => i).slice(1));
 }
 
 // ---------- paired deltas (thinking on vs off, or an arm vs the reference) + discordant pairs
@@ -289,5 +309,5 @@ function applyTheme() { const m = modes[mi]; if (m === "auto") document.document
 $("#theme").addEventListener("click", () => { mi = (mi + 1) % 3; try { localStorage.setItem("qb-theme", modes[mi]); } catch (e) {} applyTheme(); });
 applyTheme();
 function draw() { tasksChart(); thinkCharts(); lpCharts(); needleChart(); arms(); }
-header(); draw(); thresholds(); notes(); repro();
+header(); draw(); tokensTable(); thresholds(); notes(); repro();
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(draw, 120); });

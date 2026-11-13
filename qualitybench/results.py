@@ -61,7 +61,7 @@ def task_rows(side: Path, on_side: Path | None = None, on_src: str | None = None
 
 
 def side_tokens(side: Path) -> dict:
-    """Output tokens per reply (tokens_summary) of each task a run counted them for, from its state.json caps.
+    """Output tokens per reply (tokens_summary, with thinking) of each task a run counted them for, from its state.json caps.
 
     Only tasks with a count for every item (one reply per item in every harness): an older run resumed by this
     version, or a run killed mid-task and resumed, has counts for part of a task, and those would misstate it.
@@ -74,7 +74,23 @@ def side_tokens(side: Path) -> dict:
     for t, c in caps.items():
         tokens = c.get("tokens") or []
         if tokens and len(tokens) >= len(items.load(side / "items" / f"{t}.jsonl") or {}):
-            out[t] = stats.tokens_summary(tokens)
+            out[t] = stats.tokens_summary(tokens, c.get("thinking_tokens"))
+    return out
+
+
+def report_tokens(doc: dict, side: Path, on_side: Path | None = None, arm_side: Path | None = None) -> dict:
+    """The HTML report's output tokens table (side_tokens per run), which the schema-locked document has no room for.
+
+    The reference's; the thinking-on run's where its scores pair with the reference's; the compared arm's on its
+    compared tasks.
+    """
+    out = {"ref": side_tokens(side)}
+    if on_side is not None:
+        paired = {r["id"] for r in doc["tasks"] if "on" in r}
+        out["on"] = {t: s for t, s in side_tokens(on_side).items() if t in paired}
+    if arm_side is not None:
+        done = doc["arms"][doc["gate_arm"]].get("tasks") or {}
+        out["arms"] = {doc["gate_arm"]: {t: s for t, s in side_tokens(arm_side).items() if t in done}}
     return out
 
 
@@ -164,7 +180,8 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
                                 "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
                                 "--thinking on or --thinking off.")
     caveats[:0] = cap_notes
-    per = lambda s: f"{s['mean']:,} ({s['median']:,})"
+    mm = lambda s: f"{s['mean']:,} ({s['median']:,})"
+    per = lambda s: mm(s) + (f", thinking {mm(s['thinking'])}" if "thinking" in s else "")
     off, on = side_tokens(side), side_tokens(on_side) if on_side is not None else {}
     tok = []
     for r in tasks:

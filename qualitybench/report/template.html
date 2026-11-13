@@ -114,6 +114,13 @@ footer{color:var(--muted);font-size:12.5px;margin-top:22px}
     <details><summary>Table view</summary><div id="t-tasks"></div></details>
   </section>
 
+  <section id="s-tokens">
+    <h2>Output tokens per reply</h2>
+    <p class="lede">As the server counted them (on most servers reasoning included); mean and median over the task's
+      replies. Fewer is cheaper; the mean is pulled up by replies cut at the token cap, the median is not.</p>
+    <div id="t-tokens"></div>
+  </section>
+
   <section id="s-think">
     <h2>Thinking on vs off, paired</h2>
     <p class="lede">Each item is answered both ways, so the comparison is paired: the dot is the accuracy change, the line its

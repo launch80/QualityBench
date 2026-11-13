@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
+import sys
 from pathlib import Path
 
 from . import envs, items, kld, stats
@@ -101,7 +103,19 @@ def arm_tokens(ref_side: Path, test_side: Path, tasks: dict) -> tuple[dict, list
 
 
 def _pct(ref: int, test: int) -> str:
-    return f"{(test - ref) / ref:+.0%}" if ref else "n/a"
+    """Change in whole percent, halves away from zero (as the report's table rounds)."""
+    if not ref:
+        return "n/a"
+    p = 100 * (test - ref) / ref
+    return f"{'+' if p >= 0 else '-'}{math.floor(abs(p) + 0.5)}%"
+
+
+def refuse_comparison(path: Path, doc: dict) -> None:
+    """Exit 2 for a comparison given as the reference: its sidecar is never the reference run's data (absent, or the
+    test run's), so deltas and token counts would be scored against the wrong run."""
+    if doc.get("arms") or doc.get("think_dirs"):
+        print(f"compare: {path} is a comparison; pass the reference run's own results file", file=sys.stderr)
+        raise SystemExit(2)
 
 
 def params_warning(ref_side: Path, test_side: Path) -> list[str]:
@@ -149,8 +163,9 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
     test = json.loads(Path(test_json).read_text())
     rs, ts = ref_side or sidecar_for(Path(ref_json)), test_side or sidecar_for(Path(test_json))
     warn = []
+    refuse_comparison(ref_json, ref)
     for name, s in (("reference", rs), ("test", ts)):
-        if not s.is_dir():
+        if not (s / "ENV.json").is_file():  # a comparison's own sidecar holds only the report's tokens.json
             raise SystemExit(f"compare: the {name} run's per-item data ({s}) is missing; it is written next to the "
                              "results file by `qualitybench run` and must be kept with it")
     arm, w = arm_block(rs, ts, test, label, [])
@@ -161,11 +176,7 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
     key = key or arm_key(test["model"])
     if key == "ref":
         key = "test"
-    arms = dict(doc.get("arms") or {})
-    arms[key] = arm
-    while len(arms) > 3:  # the page draws at most three arms
-        arms.pop(next(iter(arms)))
-    doc["arms"] = arms
+    doc["arms"] = {key: arm}
     doc["gate_arm"] = key
     tpath = thresholds or str(default_thresholds())
     rows = parse_thresholds(tpath)
@@ -173,15 +184,11 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
     doc["gates"] = gates
     v = verdicts(arm, gates, ref.get("tasks", []))
     for r in rows:
-        prev = next((x for x in doc.get("thresholds") or [] if x["id"] == r["id"]), {})
-        res = {k: x for k, x in (prev.get("results") or {}).items() if k in arms}
         if r["id"] in v:
-            res[key] = v[r["id"]]
-        if res:
-            r["results"] = res
+            r["results"] = {key: v[r["id"]]}
     doc["thresholds"] = rows
     doc.setdefault("hashes", {})["THRESHOLDS.md"] = file_hash(tpath)
-    doc["title"] = f"{ref['model']} vs {test['model']}"[:160] if not ref.get("arms") else doc["title"]
+    doc["title"] = f"{ref['model']} vs {test['model']}"[:160]
     doc["arms_note"] = (f"Arm {key}: {test['model']} scored against the reference {ref['model']} on the same items and "
                         "the same token windows.")[:600]
     if tok:
@@ -198,6 +205,8 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
 def summary_lines(doc: dict, key: str, ref_side: Path, test_side: Path) -> list[str]:
     arm = doc["arms"][key]
     tok, _ = arm_tokens(ref_side, test_side, arm.get("tasks") or {})
+    per = lambda what, r, s: (f"    {what}/reply: mean {r['mean']:,} -> {s['mean']:,} ({_pct(r['mean'], s['mean'])}), "
+                              f"median {r['median']:,} -> {s['median']:,} ({_pct(r['median'], s['median'])})")
     out = [f"arm {key}: {arm['label']}"]
     if "kld" in arm:
         out.append(f"  KLD mean {arm['kld']['mean']:.4f} nats, top-1 agreement {arm['top1']['agree']:.2f} %")
@@ -207,8 +216,9 @@ def summary_lines(doc: dict, key: str, ref_side: Path, test_side: Path) -> list[
         out.append(f"  {t}: {q['delta']:+.2f} pts (95% CI {q['ci'][0]:+.2f} to {q['ci'][1]:+.2f}, McNemar p {q['p']:.3g})")
         if t in tok:
             r, s = tok[t]
-            out.append(f"    tokens/reply: mean {r['mean']:,} -> {s['mean']:,} ({_pct(r['mean'], s['mean'])}), "
-                       f"median {r['median']:,} -> {s['median']:,} ({_pct(r['median'], s['median'])})")
+            out.append(per("tokens", r, s))
+            if "thinking" in r and "thinking" in s:
+                out.append(per("thinking", r["thinking"], s["thinking"]))
     for th in doc.get("thresholds", []):
         r = (th.get("results") or {}).get(key)
         out.append(f"  {th['id']} {'PASS' if r and r['pass'] else 'FAIL' if r else 'n/a '} {r['value'] if r else ''}  ({th['rule']})")
