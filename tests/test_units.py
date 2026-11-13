@@ -85,6 +85,18 @@ def test_parse_thresholds_default():
     assert gates_from(rows) == {"task_delta_pts": -2.0, "top1_pct": 93.0, "ppl_delta_pct": 3.0, "kld_mean": 0.05}
 
 
+def test_t2_is_scored_on_its_own_bar():
+    from qualitybench.compare import code_ppl_gate, gates_from, verdicts
+    rows = [{"id": "T1", "metric": "ppl wiki", "rule": "delta <= +3.0 %"},
+            {"id": "T2", "metric": "ppl code", "rule": "delta <= +1.0 %"}]
+    gates = gates_from(rows)
+    assert code_ppl_gate(rows, gates) == 1.0
+    assert code_ppl_gate(rows[:1], gates) == 3.0  # no T2 row: T1's bar, as before
+    arm = {"ppl": {"ppl-wiki": {"delta_pct": 2.0}, "ppl-code": {"delta_pct": 2.0}}}
+    v = verdicts(arm, gates, [], code_ppl_gate(rows, gates))
+    assert v["T1"]["pass"] and not v["T2"]["pass"]
+
+
 def _npz(path, logits, model, sha="x"):
     lp = logits - np.log(np.exp(logits).sum(-1, keepdims=True))
     o = np.argsort(-lp, -1)[..., :64]
