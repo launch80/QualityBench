@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
+  so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
+  88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.
+
 ## 0.4.0 (2026-11-11)
 
 - **MMLU-Pro reads answers written in markdown.** lm-eval looks for `answer is (D)` or `answer is D`, so a
