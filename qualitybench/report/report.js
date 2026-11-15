@@ -94,23 +94,40 @@ function tasksChart() {
     THINK ? [2, 3, 4, 5] : [2, 3]);
 }
 
-// ---------- output tokens per reply (T: local data from beside the results file, not part of the document)
+// ---------- how much the model writes (T: local data from beside the results file, not part of the document)
 function tokensTable() {
-  // a lone run needs no label; the reference and an arm often share a model id, so "reference"
-  const cols = !T ? [] : [[T.on ? "thinking off" : ARMS.length ? "reference" : "", T.ref || {}], ...(T.on ? [["thinking on", T.on]] : []),
-    ...ARMS.filter(([k]) => Object.keys((T.arms || {})[k] || {}).length).map(([k, a]) => [a.label, T.arms[k]])];
+  // the base run and, when there is one, the run it is read against: thinking on, or the gate arm
+  const arm = T && ARMS.find(([k]) => Object.keys((T.arms || {})[k] || {}).length);
+  const base = !T ? null : [T.on ? "thinking off" : arm ? "reference" : "this run", T.ref || {}];
+  const other = !T ? null : T.on ? ["thinking on", T.on] : arm ? [arm[1].label, T.arms[arm[0]]] : null;
+  const cols = [base, other].filter(Boolean);
   const rows = D.tasks.filter(t => cols.some(([, c]) => c[t.id]));
   if (!rows.length) { hide("#s-tokens"); return; }
-  const th = cols.map(([, c]) => rows.some(t => (c[t.id] || {}).thinking));  // a thinking column only where a run has some
-  // as compare._pct: whole percent, halves away from zero
-  const n = v => Number(v).toLocaleString("en-US"), pct = (r, s, p = 100 * (s - r) / r) => `${p >= 0 ? "+" : "-"}${Math.floor(Math.abs(p) + 0.5)}%`;
-  const head = ["Task", ...cols.flatMap(([l], i) => [(l ? `${esc(l)} ` : "") + "mean", "median", ...(th[i] ? ["thinking mean · median"] : []), ...(i ? ["change"] : [])])];
-  table("#t-tokens", head, rows.map(t => [esc(t.label), ...cols.flatMap(([, c], i) => {
-    const s = c[t.id], r = cols[0][1][t.id];
-    const v = s ? [n(s.mean), n(s.median)] : ["–", "–"];
-    if (th[i]) v.push(s && s.thinking ? `${n(s.thinking.mean)} · ${n(s.thinking.median)}` : "–");
-    return i ? [...v, !s ? "–" : r && r.mean && r.median ? `${pct(r.mean, s.mean)} / ${pct(r.median, s.median)}` : "n/a"] : v;
-  })]), head.map((_, i) => i).slice(1));
+  const n = v => Math.round(v).toLocaleString("en-US");
+  const big = v => v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e4 ? Math.round(v / 1e3) + "k" : n(v);
+  const total = s => s.mean * s.n;  // whole tokens × replies: within half a token per reply of the exact sum
+  const ratio = (a, b) => b / a >= 1 ? `×${(b / a).toFixed(1)}` : `÷${(a / b).toFixed(1)}`;
+  const cell = (f, s, o) => other ? `${s ? f(s) : "–"} → ${o ? f(o) : "–"}` : s ? f(s) : "–";
+  const whole = (s, o) => cell(x => big(total(x)), s, o) + (other && s && o ? ` (${ratio(total(s), total(o))})` : "");
+  const body = rows.map(t => {
+    const s = base[1][t.id], o = other && other[1][t.id];
+    return [esc(t.label), cell(x => n(x.median), s, o), whole(s, o)];
+  });
+  // the whole suite, for each run that counted every task above
+  const sum = c => rows.every(t => c[t.id]) ? { n: 1, mean: rows.reduce((a, t) => a + total(c[t.id]), 0) } : null;
+  const all = cols.map(([, c]) => sum(c));
+  if (all.some(Boolean)) body.push(["<b>All tasks</b>", "", `<b>${whole(all[0], other ? all[1] : null)}</b>`]);
+  table("#t-tokens", ["Task", "Typical reply", "Whole benchmark"], body, [1, 2]);
+  // the lede's last sentence and the note under the table
+  const share = c => { const th = rows.filter(t => c[t.id] && c[t.id].thinking); if (!th.length) return null;
+    return 100 * th.reduce((a, t) => a + c[t.id].thinking.mean * c[t.id].n, 0) / th.reduce((a, t) => a + total(c[t.id]), 0); };
+  const thinkSide = other && share(other[1]) != null ? other[1] : share(base[1]) != null ? base[1] : null;
+  $("#tokens-how").textContent = [other ? `Each cell shows ${base[0]} → ${other[0]}.` : "",
+    thinkSide ? `Thinking made up ${Math.round(share(thinkSide))}% of the tokens ${other ? `with ${(thinkSide === other[1] ? other : base)[0]}` : "in this run"}.` : ""].filter(Boolean).join(" ");
+  const missing = cols.filter(([, c]) => rows.some(t => !c[t.id])).map(([l]) => l);
+  $("#tokens-note").textContent = "Typical reply: half the replies were shorter, half longer. Whole benchmark: every token " +
+    "for every question in the task, so replies that ran to the token limit count fully here but barely move the typical reply." +
+    (missing.length ? ` The server reported no token counts for some tasks of ${missing.join(" and ")}.` : "");
 }
 
 // ---------- paired deltas (thinking on vs off, or an arm vs the reference) + discordant pairs

@@ -115,10 +115,11 @@ footer{color:var(--muted);font-size:12.5px;margin-top:22px}
   </section>
 
   <section id="s-tokens">
-    <h2>Output tokens per reply</h2>
-    <p class="lede">As the server counted them (on most servers reasoning included); mean and median over the task's
-      replies. Fewer is cheaper; the mean is pulled up by replies cut at the token cap, the median is not.</p>
+    <h2>How much the model writes</h2>
+    <p class="lede">Everything the model generated, not counting the prompts. Fewer tokens means faster and cheaper
+      answers. <span id="tokens-how"></span></p>
     <div id="t-tokens"></div>
+    <p class="lede" id="tokens-note" style="margin-top:10px;font-size:13px"></p>
   </section>
 
   <section id="s-think">

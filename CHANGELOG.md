@@ -12,9 +12,10 @@
   (the other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted),
   `compare` warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it. When the
   server also reports `usage.completion_tokens_details.reasoning_tokens` for every reply of a task, the
-  caveat and `compare` add a thinking part. The report gets an "Output tokens per reply" table (mean,
-  median, thinking, and the change against the reference), written to `<name>.qb/tokens.json` so
-  `qualitybench report` redraws it.
+  caveat and `compare` add a thinking part. The report gets a "How much the model writes" card for
+  non-technical readers: per task the typical reply (median) and the whole benchmark (all tokens), as
+  "thinking off → thinking on" or "reference → arm" with a multiplier, an "All tasks" total and the share of
+  thinking tokens; its data is written to `<name>.qb/tokens.json` so `qualitybench report` redraws it.
 - **`compare` refuses a comparison file as the reference.** Its `.qb` folder is never the reference run's
   data, so deltas were scored against the wrong run; pass the run's own results file.
 

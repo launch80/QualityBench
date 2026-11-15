@@ -475,10 +475,10 @@ def test_report_embeds_output_tokens_outside_the_document(tmp_path, capsys):
     html = report.render(doc, tokens)
     assert 'const T = {"ref":{"lcb":{"n":20,"mean":310,"median":310}},"arms":{"q4<\\/script>":{}}};' in html
     assert html.count("</script>") == 1  # the data never ends the script block
-    assert '<section id="s-tokens">' in html and "<h2>Output tokens per reply</h2>" in html
+    assert '<section id="s-tokens">' in html and "<h2>How much the model writes</h2>" in html
     assert html.index('id="s-tasks"') < html.index('id="s-tokens"') < html.index('id="s-think"')
-    # the table's column headers: unlabelled for a lone run, else by run ("reference", the arms', thinking off/on)
-    for col in ('"mean"', '"median"', '"thinking mean · median"', '"change"', '"reference"', '"thinking off"', '"thinking on"'):
+    # the card's columns and the run labels its cells pair ("reference" in a comparison, thinking off/on on a pair)
+    for col in ('"Typical reply"', '"Whole benchmark"', '"reference"', '"thinking off"', '"thinking on"', "All tasks"):
         assert col in html
     assert "const T = null;" in report.render(doc)
     # write() keeps them next to the results file, so `qualitybench report` draws the same table later

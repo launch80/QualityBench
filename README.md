@@ -123,10 +123,12 @@ uses only earlier runs with the same params.
 ### Output tokens
 
 The proxy records `usage.completion_tokens` from every chat reply, for the scored tasks (not logprobs,
-needle or spec_parity). The report has an "Output tokens per reply" table after the accuracy chart: per task
-and run, the mean and median, and for each run other than the reference the change against it (columns
-"reference" in a comparison, "thinking off" and "thinking on" on a pair; a thinking column only when a run
-reported thinking tokens). Its data is kept in `<name>.qb/tokens.json`, so `qualitybench report` redraws it.
+needle or spec_parity). The report has a "How much the model writes" card after the accuracy chart, written
+for readers who do not know what a median is: per task, the typical reply (the median) and the whole
+benchmark (every token of every reply), each as "thinking off → thinking on" on a pair or "reference → arm"
+in a comparison, with the whole-benchmark multiplier and an "All tasks" total; a sentence names the share
+of thinking tokens when the server reported them. Its data is kept in `<name>.qb/tokens.json`, so
+`qualitybench report` redraws it.
 The same mean and median are published as one caveat (the report's Caveats), logged at each task's end, and
 printed by `compare`. Thinking models differ a lot in tokens spent for the same score: two quantized builds,
 or a "swift" and a "thinking-cap" variant, can match on accuracy while one writes half the tokens, and
