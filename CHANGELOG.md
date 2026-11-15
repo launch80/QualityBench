@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **The LiveCodeBench contamination caveat is gone.** Every report with LCB said its problems "may predate the
+  model's training cutoff". The slice is contests from January to April 2025, so for any current model the
+  sentence was always true, and it was true for every other task as well (GSM8K, HumanEval+ and MBPP+ are
+  from 2021, IFEval from 2023, MMLU-Pro from 2024), none of which carried such a note. Singling out the
+  freshest task in the suite misled readers into treating it as the suspect one. The scores are unchanged.
+
 ## 0.4.0 (2026-11-11)
 
 - **MMLU-Pro reads answers written in markdown.** lm-eval looks for `answer is (D)` or `answer is D`, so a
