@@ -2,11 +2,9 @@
 
 ## Unreleased
 
-- **The LiveCodeBench contamination caveat is gone.** Every report with LCB said its problems "may predate the
-  model's training cutoff". The slice is contests from January to April 2025, so for any current model the
-  sentence was always true, and it was true for every other task as well (GSM8K, HumanEval+ and MBPP+ are
-  from 2021, IFEval from 2023, MMLU-Pro from 2024), none of which carried such a note. Singling out the
-  freshest task in the suite misled readers into treating it as the suspect one. The scores are unchanged.
+- **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
+  so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
+  88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.
 
 ## 0.4.0 (2026-11-11)
 
