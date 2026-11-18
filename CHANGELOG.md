@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-- **Fix: the token-cap caveat no longer tells a `--thinking off` run to use `--thinking off`.** It now says
-  how many of the task's replies reasoned although thinking was off (the server may not honour
-  `enable_thinking`), or, when none did, that the harnesses' own limits (2048 tokens, 4096 for LiveCodeBench)
-  applied. Such a run also gets a caveat and a `run.log` warning counting the replies that reasoned.
+- **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
+  so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
+  88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.
 
 ## 0.4.0 (2026-11-11)
 
