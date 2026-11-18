@@ -286,6 +286,38 @@ def test_token_cap_caveats_and_no_logprobs_is_submittable(tmp_path):
     assert results.validate_shape(doc) == []  # task scores alone may be submitted
     quiet = results.build(_side(tmp_path / "q", {"caps": {"lcb": {"replies": 200, "length": 1, "reasoning": 0}}}, "off"))
     assert not any("token cap" in c for c in quiet["caveats"])  # under 1%: no caveat
+
+
+def test_cap_caveat_follows_thinking(tmp_path):
+    from qualitybench import results
+
+    def cav(thinking, reasoning):
+        caps = {"lcb": {"replies": 20, "length": 6, "reasoning": reasoning, "thinking": thinking}}
+        doc = results.build(_side(tmp_path / f"{thinking}{reasoning}", {"caps": caps}, thinking))
+        assert results.validate_shape(doc) == []
+        return " ".join(doc["caveats"])
+    on = cav("on", 20)
+    assert "understates the model; raise --thinking-max-tokens." in on and "reasoned in" not in on
+    off = cav("off", 3)
+    assert ("understates the model; 3 of them reasoned although thinking was off, so the server may not honour "
+            "enable_thinking: check its chat template, or run with --thinking on.") in off
+    assert "The model reasoned in 3 replies although thinking was off (enable_thinking=false)" in off
+    plain = cav("off", 0)
+    assert ("understates the model; with thinking off the harness's own limit applies (2048 tokens, 4096 for "
+            "LiveCodeBench) and the model writes longer replies than that.") in plain
+    assert "reasoned" not in plain and "--thinking on" not in plain
+
+
+def test_record_caps_warns_when_thinking_off_still_reasons(tmp_path):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import _record_caps
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb", thinking="off")
+    ctx.load_state()
+    _record_caps(ctx, "mmlu_pro", {"replies": 1000, "length": 125, "reasoning": 40})
+    assert ("mmlu_pro: WARNING: 40 of 1000 replies had reasoning although --thinking off was set; the server may not "
+            "honour enable_thinking") in (tmp_path / "r.qb" / "run.log").read_text()
+
+
 def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
     # build_inputs.py prints "tokenizer: <why>" as its last line; ensure_inputs makes that the task's failure
     import sys
