@@ -127,16 +127,27 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
             continue
         share = c["length"] / c["replies"]
         if share >= CAP_SHARE:
-            fix = ("raise --thinking-max-tokens" if c.get("thinking") == "on" else
-                   "use --thinking on (with --thinking-max-tokens) or --thinking off")
+            if c.get("thinking") == "on":
+                fix = "raise --thinking-max-tokens"
+            elif c.get("thinking") == "off" and c.get("reasoning"):
+                fix = (f"{c['reasoning']} of them reasoned although thinking was off, so the server may not honour "
+                       "enable_thinking: check its chat template, or run with --thinking on")
+            elif c.get("thinking") == "off":
+                fix = ("with thinking off the harness's own limit applies (2048 tokens, 4096 for LiveCodeBench) "
+                       "and the model writes longer replies than that")
+            else:
+                fix = "use --thinking on (with --thinking-max-tokens) or --thinking off"
             cap_notes.append(f"{BY_ID[t].label}: {c['length']} of {c['replies']} replies ({share:.0%}) stopped at the "
                              f"token cap and count as wrong, so this score understates the model; {fix}.")
-    if not env_raw.get("thinking") or env_raw.get("thinking") == "server default":
-        seen = sum(c.get("reasoning", 0) for c in caps.values())
-        if seen:
-            cap_notes.insert(0, f"The model reasoned in {seen} replies, but thinking was left at the server's default, "
-                                "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
-                                "--thinking on or --thinking off.")
+    seen = sum(c.get("reasoning", 0) for c in caps.values())
+    if seen and (not env_raw.get("thinking") or env_raw.get("thinking") == "server default"):
+        cap_notes.insert(0, f"The model reasoned in {seen} replies, but thinking was left at the server's default, "
+                            "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
+                            "--thinking on or --thinking off.")
+    elif seen and env_raw.get("thinking") == "off":
+        cap_notes.insert(0, f"The model reasoned in {seen} replies although thinking was off (enable_thinking=false); "
+                            "the server may not honour it, so those replies hit the harnesses' token limits. Check the "
+                            "server's chat template, or run with --thinking on.")
     caveats[:0] = cap_notes
     if "gsm8k" in ran:
         caveats.append(BASE_CAVEATS["gsm8k"])
