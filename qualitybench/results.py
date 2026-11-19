@@ -164,7 +164,7 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
         doc["needle"] = {"model": nd.get("model", model)[:200], "summary": nd["summary"], "items": nd["items"]}
     if (side / "mrcr.json").is_file():
         md = json.loads((side / "mrcr.json").read_text())
-        keep = ("id", "length", "ratio", "prompt_tokens")
+        keep = ("id", "length", "ratio", "prompt_tokens", "completion_tokens", "reasoning_tokens")
         doc["mrcr"] = {"model": md.get("model", model)[:200], "n_needles": md.get("n_needles", 8), "summary": md["summary"],
                        "items": [{k: d[k] for k in keep if k in d} for d in md["items"]][:400]}
         hashes["items:mrcr"] = item_hash([d["id"] for d in md["items"]])

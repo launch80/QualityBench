@@ -150,9 +150,10 @@ footer{color:var(--muted);font-size:12.5px;margin-top:22px}
     <h2>Long-context co-reference (MRCR 8-needle)</h2>
     <p class="lede">openai/mrcr: eight identical asks hidden in a 64k or 128k conversation, and the model must return the
       asked-for reply with a random prefix. One cell per conversation, coloured by the SequenceMatcher ratio of the
-      reply to the expected text: green at 0.9 or more, amber partial, red for 0 or a missing prefix. Greedy decoding.</p>
+      reply to the expected text: green at 0.9 or more, amber from 0.5, red below that (a different piece, a missing
+      prefix, or nothing). Greedy decoding.</p>
     <div class="chart" id="c-mrcr"></div>
-    <details><summary>Table view</summary><div id="t-mrcr"></div></details>
+    <details><summary>Table view</summary><div id="t-mrcr"></div><p class="lede" id="mrcr-tokens" style="margin-top:8px"></p></details>
   </section>
 
   <section id="s-thr">

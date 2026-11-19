@@ -264,14 +264,21 @@ def server_context(client: qhttp.Client, model: str) -> int | None:
 
 
 def mrcr_summary(its: list[dict]) -> dict:
-    """Per length: items, mean and median ratio, replies that missed the prefix, replies cut at the token cap."""
+    """Per length: items, mean and median ratio, replies that missed the prefix, replies cut at the token cap, and the
+    mean prompt and reply tokens as the server counted them (plus the thinking share when the server reports it)."""
     out = {}
     for L in sorted({d["length"] for d in its}):
         rows = [d for d in its if d["length"] == L]
         xs = [d["ratio"] for d in rows]
-        out[str(L)] = {"n": len(xs), "mean": round(statistics.fmean(xs), 4), "p50": round(statistics.median(xs), 4),
-                       "prefix_fail": sum(1 for d in rows if not d.get("prefix_ok", True)),
-                       "capped": sum(1 for d in rows if d.get("finish") == "length")}
+        s = {"n": len(xs), "mean": round(statistics.fmean(xs), 4), "p50": round(statistics.median(xs), 4),
+             "prefix_fail": sum(1 for d in rows if not d.get("prefix_ok", True)),
+             "capped": sum(1 for d in rows if d.get("finish") == "length"),
+             "prompt_tokens": int(statistics.fmean(d.get("prompt_tokens") or 0 for d in rows) + 0.5),
+             "completion_tokens": int(statistics.fmean(d.get("completion_tokens") or 0 for d in rows) + 0.5)}
+        think = [d["reasoning_tokens"] for d in rows if d.get("reasoning_tokens") is not None]
+        if think:
+            s["reasoning_tokens"] = int(statistics.fmean(think) + 0.5)
+        out[str(L)] = s
     return out
 
 
@@ -322,6 +329,9 @@ def run_mrcr(ctx: Ctx, client: qhttp.Client) -> None:
         d = {"id": p["id"], "length": p["length"], "ratio": round(grade_mrcr(reply, it["answer"], it["prefix"]), 4),
              "prefix_ok": reply.startswith(it["prefix"]), "prompt_tokens": u.get("prompt_tokens") or 0,
              "completion_tokens": u.get("completion_tokens") or 0, "finish": ch.get("finish_reason") or ""}
+        rt = (u.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        if rt is not None:  # vLLM and radiance count the thinking inside completion_tokens; keep it apart when they say
+            d["reasoning_tokens"] = int(rt)
         with lock:
             with open(out, "a") as f:
                 f.write(json.dumps(d) + "\n")
@@ -347,8 +357,10 @@ def run_mrcr(ctx: Ctx, client: qhttp.Client) -> None:
                                                  "summary": summary, "items": its}, indent=1))
     score = round(100 * statistics.fmean(d["ratio"] for d in its), 2) if its else None
     for L, s in summary.items():
+        think = f", {s['reasoning_tokens']:,} of them thinking" if "reasoning_tokens" in s else ""
         log_to(ctx, f"mrcr {int(L) // 1024}k: {s['n']} items, mean match ratio {s['mean']:.4f} (median {s['p50']:.4f}), "
-                    f"{s['prefix_fail']} missed the prefix, {s['capped']} hit the token cap")
+                    f"{s['prefix_fail']} missed the prefix, {s['capped']} hit the token cap; "
+                    f"{s['prompt_tokens']:,} prompt and {s['completion_tokens']:,} reply tokens per item{think}")
     emit("mrcr", state="scored", done=len(its), total=len(pinned), score=score)
 
 

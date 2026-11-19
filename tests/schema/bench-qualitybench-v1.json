@@ -1002,6 +1002,21 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 100000
+         },
+         "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+         },
+         "completion_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+         },
+         "reasoning_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
          }
         }
        }
@@ -1033,6 +1048,16 @@
           "maximum": 1
          },
          "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+         },
+         "completion_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+         },
+         "reasoning_tokens": {
           "type": "integer",
           "minimum": 0,
           "maximum": 100000000

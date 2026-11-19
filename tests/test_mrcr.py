@@ -55,8 +55,11 @@ def test_summary_and_results_block(tmp_path):
             "completion_tokens": 300, "finish": "length" if k == 5 else "stop"}
            for k, r in enumerate([1.0, 0.8, 0.0, 1.0, 0.5, 0.2])]
     s = native.mrcr_summary(its)
-    assert s == {"65536": {"n": 4, "mean": 0.7, "p50": 0.9, "prefix_fail": 1, "capped": 0},
-                 "131072": {"n": 2, "mean": 0.35, "p50": 0.35, "prefix_fail": 0, "capped": 1}}
+    assert s == {"65536": {"n": 4, "mean": 0.7, "p50": 0.9, "prefix_fail": 1, "capped": 0, "prompt_tokens": 50002, "completion_tokens": 300},
+                 "131072": {"n": 2, "mean": 0.35, "p50": 0.35, "prefix_fail": 0, "capped": 1, "prompt_tokens": 50005, "completion_tokens": 300}}
+    its[1]["reasoning_tokens"] = 120  # a server that reports the thinking share: the mean over the items that have it
+    assert native.mrcr_summary(its)["65536"]["reasoning_tokens"] == 120 and "reasoning_tokens" not in native.mrcr_summary(its)["131072"]
+    del its[1]["reasoning_tokens"]
     side = tmp_path / "r.qb"
     (side / "items").mkdir(parents=True)
     (side / "ENV.json").write_text(json.dumps({"model": "m", "thinking": "off", "date": "2026-11-18"}))
@@ -64,7 +67,7 @@ def test_summary_and_results_block(tmp_path):
     (side / "items" / "gsm8k.jsonl").write_text("".join(json.dumps({"id": f"gsm8k/{i}", "correct": i % 2 == 0}) + "\n" for i in range(20)))
     doc = results.build(side)
     assert doc["mrcr"]["summary"] == s and doc["mrcr"]["n_needles"] == 8
-    assert doc["mrcr"]["items"][0] == {"id": "i0", "length": 65536, "ratio": 1.0, "prompt_tokens": 50000}  # no per-item text
+    assert doc["mrcr"]["items"][0] == {"id": "i0", "length": 65536, "ratio": 1.0, "prompt_tokens": 50000, "completion_tokens": 300}  # no per-item text
     assert "items:mrcr" in doc["hashes"]
     assert any("MRCR 8-needle: 1 of 6 replies (17%) stopped at the token cap" in c for c in doc["caveats"])
     publishable(doc)
@@ -120,7 +123,11 @@ def test_run_mrcr_against_fake_server(mrcr_home, tmp_path, capsys):
         assert by["aaaa000000000001"]["ratio"] == 1.0 and by["eeee000000000005"]["ratio"] == 1.0
         assert 0 < by["bbbb000000000002"]["ratio"] < 1
         assert doc["mrcr"]["summary"]["65536"]["n"] == 2
-        assert doc["mrcr"]["summary"]["131072"] == {"n": 1, "mean": 1.0, "p50": 1.0, "prefix_fail": 0, "capped": 0}
+        s128 = doc["mrcr"]["summary"]["131072"]
+        assert {k: s128[k] for k in ("n", "mean", "p50", "prefix_fail", "capped")} == {"n": 1, "mean": 1.0, "p50": 1.0, "prefix_fail": 0, "capped": 0}
+        assert s128["prompt_tokens"] > 0 and s128["completion_tokens"] > 0 and "reasoning_tokens" not in s128  # the fake reports no thinking
+        assert by["eeee000000000005"]["completion_tokens"] > 0 and "reasoning_tokens" not in by["eeee000000000005"]
+        assert "Reply tokens" in (tmp_path / "r.html").read_text()
         assert doc["partials"] == ["mrcr: 2 of 3 at 128k skipped, over the server's context (131072 tokens)"]
         assert "items:mrcr" in doc["hashes"] and (tmp_path / "r.qb" / "mrcr-items.jsonl").is_file()
         assert "MRCR 8-needle" in (tmp_path / "r.html").read_text()

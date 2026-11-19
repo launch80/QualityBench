@@ -217,16 +217,22 @@ function mrcrChart() {
   if (!D.mrcr || !D.mrcr.items.length) { hide("#s-mrcr"); return; }
   const it = D.mrcr.items, lens = [...new Set(it.map(x => x.length))].sort((a, b) => a - b), S = D.mrcr.summary || {};
   const w = W("#c-mrcr"), L = 70, top = 6, ch = 30, h = top + lens.length * ch + 8, svg = svgIn($("#c-mrcr"), w, h), g = el("g", {}, svg);
-  const col = r => r >= 0.9 ? "var(--good)" : r > 0 ? "var(--warn)" : "var(--crit)";
+  const col = r => r >= 0.9 ? "var(--good)" : r >= 0.5 ? "var(--warn)" : "var(--crit)";
+  const mean = (rows, k) => { const v = rows.map(x => x[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const anyThink = it.some(x => x.reasoning_tokens != null) || Object.values(S).some(s => s.reasoning_tokens != null);
   lens.forEach((Ln, i) => {
     const row = it.filter(x => x.length === Ln).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)), cw = (w - L) / row.length;
     txt(g, L - 10, top + i * ch + ch / 2 + 4, (Ln / 1024) + "k", { class: "lbl", "text-anchor": "end" });
     row.forEach((x, j) => el("rect", { x: L + j * cw + 0.5, y: top + i * ch + 2, width: Math.max(1, cw - 1), height: ch - 4, rx: 2, fill: col(x.ratio), opacity: .9,
-      "data-tip": `<b>${Ln / 1024}k context, item ${esc(x.id)}</b><br>match ratio ${fmt(x.ratio, 3)}${x.prompt_tokens ? `<br>${x.prompt_tokens} prompt tokens` : ""}` }, g));
+      "data-tip": `<b>${Ln / 1024}k context, item ${esc(x.id)}</b><br>match ratio ${fmt(x.ratio, 3)}${x.prompt_tokens ? `<br>${x.prompt_tokens.toLocaleString()} prompt tokens` : ""}${x.completion_tokens ? `<br>${x.completion_tokens.toLocaleString()} reply tokens${x.reasoning_tokens != null ? ` (${x.reasoning_tokens.toLocaleString()} thinking)` : ""}` : ""}` }, g));
   });
-  table("#t-mrcr", ["Context", "Conversations", "Mean match", "Median ratio", "Ratio ≥ 0.9", "Prefix missing", "Hit token cap"],
-    lens.map(Ln => { const s = S[String(Ln)] || {}, row = it.filter(x => x.length === Ln), mean = s.mean != null ? s.mean : row.reduce((a, x) => a + x.ratio, 0) / row.length;
-      return [(Ln / 1024) + "k", row.length, fmt(100 * mean, 1) + "%", s.p50 != null ? fmt(s.p50, 3) : "–", row.filter(x => x.ratio >= 0.9).length, s.prefix_fail != null ? s.prefix_fail : "–", s.capped != null ? s.capped : "–"]; }), [1, 2, 3, 4, 5, 6]);
+  const tok = v => v == null ? "–" : Math.round(v).toLocaleString();
+  table("#t-mrcr", ["Context", "Conversations", "Mean match", "Median ratio", "Ratio ≥ 0.9", "Prefix missing", "Hit token cap", "Prompt tokens", "Reply tokens", ...(anyThink ? ["of which thinking"] : [])],
+    lens.map(Ln => { const s = S[String(Ln)] || {}, row = it.filter(x => x.length === Ln), m = s.mean != null ? s.mean : row.reduce((a, x) => a + x.ratio, 0) / row.length;
+      return [(Ln / 1024) + "k", row.length, fmt(100 * m, 1) + "%", s.p50 != null ? fmt(s.p50, 3) : "–", row.filter(x => x.ratio >= 0.9).length, s.prefix_fail != null ? s.prefix_fail : "–", s.capped != null ? s.capped : "–",
+        tok(s.prompt_tokens != null ? s.prompt_tokens : mean(row, "prompt_tokens")), tok(s.completion_tokens != null ? s.completion_tokens : mean(row, "completion_tokens")),
+        ...(anyThink ? [tok(s.reasoning_tokens != null ? s.reasoning_tokens : mean(row, "reasoning_tokens"))] : [])]; }), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  $("#mrcr-tokens").textContent = "Prompt and reply tokens are per conversation, as the server counted them, so prompt tokens show the context length in this model's own tokenizer.";
 }
 
 // ---------- thresholds
