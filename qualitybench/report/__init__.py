@@ -5,6 +5,8 @@ import html
 import json
 from pathlib import Path
 
+from ..suite import SUITE
+
 _DIR = Path(__file__).parent
 
 
@@ -12,7 +14,8 @@ def render(doc: dict) -> str:
     tpl = (_DIR / "template.html").read_text()
     # </script> inside a string must not end the script block
     data = json.dumps(doc, separators=(",", ":")).replace("</", "<\\/")
-    script = (_DIR / "report.js").read_text().replace("/*__DATA__*/null", data)
+    about = json.dumps({t.id: {"label": t.label, "about": t.about} for t in SUITE}, separators=(",", ":")).replace("</", "<\\/")
+    script = (_DIR / "report.js").read_text().replace("/*__DATA__*/null", data).replace("/*__ABOUT__*/{}", about)
     return tpl.replace("__TITLE__", html.escape(doc.get("title", "QualityBench"))).replace("/*__SCRIPT__*/", script)
 
 

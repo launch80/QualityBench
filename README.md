@@ -53,7 +53,8 @@ qualitybench run --endpoint http://127.0.0.1:8000/v1 --model my-model --out resu
 
 This writes three things:
 - `results/bf16.json`: the results file, a summary under 256 KB (the `bench.qualitybench.v1` format launch80 renders).
-- `results/bf16.html`: a self-contained report with charts. It works offline.
+- `results/bf16.html`: a self-contained report with charts. It works offline, and it explains each benchmark on
+  hover and in a "What the benchmarks measure" list.
 - `results/bf16.qb/`: per-item records, raw harness output, logprob arrays and `run.log`. `compare` needs this
   folder, so keep it next to the results file. It is never part of a published payload.
 
