@@ -169,7 +169,8 @@ logprob chunks are kept and skipped.
   LiveCodeBench), which a thinking model spends before it answers. The preflight stops a model that thinks by
   default, and every run counts replies that stopped at the token cap. A task where 1% or more did gets a caveat
   in the results. Use `--thinking off` for the baseline, or `--thinking on --thinking-max-tokens 32768` (or more
-  for a large model on hard code problems) to measure thinking quality.
+  for a large model on hard code problems) to measure thinking quality. With `--thinking off`, replies that still
+  reason (a server that does not honour `enable_thinking`) hit the harnesses' limits, and the caveat says so.
 
 ## Compare
 

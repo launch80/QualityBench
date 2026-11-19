@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
+  so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
+  88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.
 - **New opt-in task `mrcr` (MRCR 8-needle).** The `needle` task scores 100% at both lengths on current 27B
   models, so it cannot see what a quantized KV cache or INT4 weights do to long context. `mrcr` runs the
   openai/mrcr 8-needle conversations: eight identical asks hidden in a 64k or 128k conversation, and the

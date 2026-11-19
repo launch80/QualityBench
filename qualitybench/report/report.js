@@ -54,7 +54,14 @@ function header() {
   const tiles = [[`${D.tasks.length}`, "tasks scored", THINK ? "thinking off and on" : "thinking off is the reference"]];
   if (D.tasks.length) {
     const best = D.tasks.reduce((a, t) => a + t.off.acc, 0) / D.tasks.length;
-    tiles.push([fmt(best) + "%", "mean task accuracy", "unweighted, over the tasks above"]);
+    const onTasks = D.tasks.filter(t => t.on);
+    if (onTasks.length) {  // paired report: the reference's mean and the thinking-on run's, side by side
+      const onMean = onTasks.reduce((a, t) => a + t.on.acc, 0) / onTasks.length;
+      const part = onTasks.length < D.tasks.length ? ` (${onTasks.length} tasks)` : "";
+      tiles.push([`${fmt(best)}% / ${fmt(onMean)}%`, "mean task accuracy", `thinking off / thinking on${part}, unweighted`]);
+    } else {
+      tiles.push([fmt(best) + "%", "mean task accuracy", "unweighted, over the tasks above"]);
+    }
   }
   if (LP["ppl-wiki"]) tiles.push([fmt(LP["ppl-wiki"].ppl, 3), "perplexity, wikitext-2", `${LP["ppl-wiki"].windows} × ${LP["ppl-wiki"].window_tokens || LP["ppl-wiki"].positions + 1} tokens`]);
   if (LP["ppl-code"]) tiles.push([fmt(LP["ppl-code"].ppl, 3), "perplexity, code", `${LP["ppl-code"].windows} × ${LP["ppl-code"].window_tokens || LP["ppl-code"].positions + 1} tokens`]);

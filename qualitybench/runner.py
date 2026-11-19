@@ -261,6 +261,9 @@ def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
         log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning, but --thinking was "
                     "not set, so the harnesses' short token limits apply. Rerun with --thinking on "
                     "--thinking-max-tokens 32768, or --thinking off")
+    if ctx.thinking == "off" and st["reasoning"]:
+        log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning although "
+                    "--thinking off was set; the server may not honour enable_thinking")
 
 
 def _write(ctx: Ctx, doc: dict, out: Path) -> None:
