@@ -13,11 +13,13 @@ from qualitybench.tasks.native import parity_compare
 
 
 def test_suite_matches_l80_table():
-    # L80's internal/qualitybench/suite.go holds the same ids, item counts and default flags.
+    # L80's internal/qualitybench/suite.go holds the same ids, item counts and default flags. mrcr is opt-in
+    # until the release that adds it there (docs/contract.md).
     want = [("gsm8k", 1319, True), ("ifeval", 541, True), ("mmlu_pro", 1000, True), ("humaneval", 164, True),
             ("mbpp", 378, True), ("bfcl", 400, True), ("lcb", 175, True), ("logprobs", 592, True),
-            ("needle", 20, True), ("spec_parity", 32, False)]
+            ("needle", 20, True), ("spec_parity", 32, False), ("mrcr", 200, False)]
     assert [(t.id, t.items, t.default) for t in suite.SUITE] == want
+    assert suite.run_order(["mrcr", "gsm8k", "bfcl"], deadline=True) == ["bfcl", "gsm8k", "mrcr"]  # the dearest task last
 
 
 def test_parse_tasks():
@@ -140,6 +142,11 @@ def test_estimate_scales_with_server_speed_and_history():
     assert abs(fast["tasks"][0]["min"] - (ov + (19 - ov) / 4)) < 0.1
     think = e.estimate(["gsm8k"], False, "on", "m", ref, history=[])
     assert think["tasks"][0]["min"] > 3 * full["tasks"][0]["min"]
+    # mrcr is prefill-bound: thinking on changes nothing, a 10x faster prefill cuts it tenfold
+    mr = e.estimate(["mrcr"], False, "on", "m", ref, history=[])
+    assert mr["tasks"][0]["min"] == e.REF_MINUTES["mrcr"] and mr["tasks"][0]["items"] == 200
+    quick_fast = e.estimate(["mrcr"], True, "off", "m", {"decode_tps": 1, "prefill_tps": e.REF_PREFILL_TPS * 10}, history=[])
+    assert quick_fast["tasks"][0]["items"] == 20 and quick_fast["tasks"][0]["min"] < 3
     nothing = e.estimate(["gsm8k"], True, None, "m", None, history=[])
     assert nothing["source"] == "reference" and nothing["tasks"][0]["items"] == 132
     # an earlier quick run of this model: scale its wall time to the full item count

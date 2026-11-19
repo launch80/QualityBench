@@ -26,6 +26,9 @@ SUITE: list[Task] = [
     Task("logprobs", "Logprobs", 592, "teacher-forced top-64 over fixed 2048-token windows", cost=16),
     Task("needle", "Needle", 20, "7-digit needle at 10 depths, 32k and 128k context", cost=10),
     Task("spec_parity", "Spec parity", 32, "greedy text, 256 tokens, compared across runs", default=False, cost=2),
+    # Opt-in until L80's suite.go carries it: 200 conversations of 33k-128k tokens, prefill-heavy, so it runs last.
+    Task("mrcr", "MRCR 8-needle", 200, "openai/mrcr: 8 identical asks in a 64k or 128k conversation, SequenceMatcher "
+         "ratio of the asked-for reply", default=False, cost=60),
 ]
 
 #: Tasks scored per item as right/wrong (the "tasks" block of the results).

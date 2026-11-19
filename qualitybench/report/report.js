@@ -59,6 +59,8 @@ function header() {
   if (LP["ppl-wiki"]) tiles.push([fmt(LP["ppl-wiki"].ppl, 3), "perplexity, wikitext-2", `${LP["ppl-wiki"].windows} × ${LP["ppl-wiki"].window_tokens || LP["ppl-wiki"].positions + 1} tokens`]);
   if (LP["ppl-code"]) tiles.push([fmt(LP["ppl-code"].ppl, 3), "perplexity, code", `${LP["ppl-code"].windows} × ${LP["ppl-code"].window_tokens || LP["ppl-code"].positions + 1} tokens`]);
   if (nd.length) tiles.push([`${nd.filter(x => x.correct).length}/${nd.length}`, "needle retrievals", [...new Set(nd.map(x => x.length / 1024 + "k"))].join(" and ") + " context"]);
+  const mr = D.mrcr ? D.mrcr.items : [];
+  if (mr.length) tiles.push([fmt(100 * mr.reduce((a, x) => a + x.ratio, 0) / mr.length, 1) + "%", "MRCR 8-needle match", `${mr.length} conversations, ${[...new Set(mr.map(x => x.length / 1024 + "k"))].join(" and ")} context`]);
   if (LP.kld) tiles.push([fmt(100 * LP.kld.mass_mean, 1) + "%", `probability in top-${(D.eval_meta || {}).topk || 64}`, `KLD set mean; 1st pct ${fmt(100 * LP.kld.mass_p01, 1)}%`]);
   for (const [k, a] of ARMS) if (a.kld) tiles.push([fmt(a.kld.mean, 4), `mean KLD, ${a.label}`, a.top1 ? `top-1 agreement ${fmt(a.top1.agree, 2)}%` : "nats"]);
   $("#tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="v">${esc(t[0])}</div><div class="l">${esc(t[1])}</div><div class="n">${esc(t[2])}</div></div>`).join("");
@@ -210,6 +212,23 @@ function needleChart() {
   table("#t-needle", ["Context", ...deps.map(d => Math.round(100 * d) + "%")], lens.map(Ln => [(Ln / 1024) + "k", ...deps.map(d => { const x = it.find(q => q.length === Ln && q.depth === d); return !x ? "–" : x.correct ? "✓" : "✗"; })]));
 }
 
+// ---------- MRCR 8-needle: one cell per conversation, coloured by its match ratio
+function mrcrChart() {
+  if (!D.mrcr || !D.mrcr.items.length) { hide("#s-mrcr"); return; }
+  const it = D.mrcr.items, lens = [...new Set(it.map(x => x.length))].sort((a, b) => a - b), S = D.mrcr.summary || {};
+  const w = W("#c-mrcr"), L = 70, top = 6, ch = 30, h = top + lens.length * ch + 8, svg = svgIn($("#c-mrcr"), w, h), g = el("g", {}, svg);
+  const col = r => r >= 0.9 ? "var(--good)" : r > 0 ? "var(--warn)" : "var(--crit)";
+  lens.forEach((Ln, i) => {
+    const row = it.filter(x => x.length === Ln).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)), cw = (w - L) / row.length;
+    txt(g, L - 10, top + i * ch + ch / 2 + 4, (Ln / 1024) + "k", { class: "lbl", "text-anchor": "end" });
+    row.forEach((x, j) => el("rect", { x: L + j * cw + 0.5, y: top + i * ch + 2, width: Math.max(1, cw - 1), height: ch - 4, rx: 2, fill: col(x.ratio), opacity: .9,
+      "data-tip": `<b>${Ln / 1024}k context, item ${esc(x.id)}</b><br>match ratio ${fmt(x.ratio, 3)}${x.prompt_tokens ? `<br>${x.prompt_tokens} prompt tokens` : ""}` }, g));
+  });
+  table("#t-mrcr", ["Context", "Conversations", "Mean match", "Median ratio", "Ratio ≥ 0.9", "Prefix missing", "Hit token cap"],
+    lens.map(Ln => { const s = S[String(Ln)] || {}, row = it.filter(x => x.length === Ln), mean = s.mean != null ? s.mean : row.reduce((a, x) => a + x.ratio, 0) / row.length;
+      return [(Ln / 1024) + "k", row.length, fmt(100 * mean, 1) + "%", s.p50 != null ? fmt(s.p50, 3) : "–", row.filter(x => x.ratio >= 0.9).length, s.prefix_fail != null ? s.prefix_fail : "–", s.capped != null ? s.capped : "–"]; }), [1, 2, 3, 4, 5, 6]);
+}
+
 // ---------- thresholds
 function thresholds() {
   const T = D.thresholds || [];
@@ -246,6 +265,7 @@ function arms() {
     if (a.kld) kv.push(["Mean KLD", `${fmt(a.kld.mean, 4)} nats (median ${fmt(a.kld.p50, 4)}, p99 ${fmt(a.kld.p99, 3)})`]);
     if (a.top1) kv.push(["Top-1 agreement", `${fmt(a.top1.agree, 2)}%${a.top1.n ? ` of ${a.top1.n.toLocaleString()} positions` : ""}`]);
     for (const [s, p] of Object.entries(a.ppl || {})) kv.push([`Perplexity, ${esc((LP[s] || {}).label || s)}`, `${fmt(p.ref, 4)} → ${fmt(p.arm, 4)} (${sign(p.delta_pct)}%)`]);
+    if (a.mrcr) kv.push(["MRCR 8-needle match", `${fmt(a.mrcr.ref, 1)}% → ${fmt(a.mrcr.arm, 1)}% (${sign(a.mrcr.delta)} pts, 95% CI ${sign(a.mrcr.ci[0])} to ${sign(a.mrcr.ci[1])}, ${a.mrcr.n} conversations)`]);
     if (a.spec_parity) kv.push(["Spec parity", `${a.spec_parity.n - a.spec_parity.mismatches.length}/${a.spec_parity.n} prompts identical`]);
     div.innerHTML = `<h3><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${c};margin-right:6px"></i>${esc(a.label)}</h3>` +
       (a.description ? `<p class="lede" style="margin-bottom:8px">${esc(a.description)}</p>` : "") +
@@ -288,6 +308,6 @@ try { const s = localStorage.getItem("qb-theme"); if (s) mi = Math.max(0, modes.
 function applyTheme() { const m = modes[mi]; if (m === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", m); $("#theme").textContent = "Theme: " + m; }
 $("#theme").addEventListener("click", () => { mi = (mi + 1) % 3; try { localStorage.setItem("qb-theme", modes[mi]); } catch (e) {} applyTheme(); });
 applyTheme();
-function draw() { tasksChart(); thinkCharts(); lpCharts(); needleChart(); arms(); }
+function draw() { tasksChart(); thinkCharts(); lpCharts(); needleChart(); mrcrChart(); arms(); }
 header(); draw(); thresholds(); notes(); repro();
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(draw, 120); });

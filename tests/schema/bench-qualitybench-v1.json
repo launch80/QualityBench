@@ -866,9 +866,186 @@
         }
        }
       }
+     },
+     "mrcr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "n",
+       "ref",
+       "arm",
+       "delta",
+       "ci"
+      ],
+      "properties": {
+       "n": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000000
+       },
+       "ref": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100
+       },
+       "arm": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100
+       },
+       "delta": {
+        "type": "number",
+        "minimum": -100,
+        "maximum": 100
+       },
+       "ci": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {
+         "type": "number",
+         "minimum": -100,
+         "maximum": 100
+        }
+       },
+       "by_length": {
+        "type": "object",
+        "maxProperties": 16,
+        "propertyNames": {
+         "pattern": "^[0-9]{1,9}$"
+        },
+        "additionalProperties": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "n",
+          "ref",
+          "arm"
+         ],
+         "properties": {
+          "n": {
+           "type": "integer",
+           "minimum": 0,
+           "maximum": 100000
+          },
+          "ref": {
+           "type": "number",
+           "minimum": 0,
+           "maximum": 100
+          },
+          "arm": {
+           "type": "number",
+           "minimum": 0,
+           "maximum": 100
+          }
+         }
+        }
+       }
+      }
      }
     }
    }
+  },
+  "mrcr": {
+   "anyOf": [
+    {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "items"
+     ],
+     "properties": {
+      "model": {
+       "type": "string",
+       "maxLength": 200
+      },
+      "n_needles": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 64
+      },
+      "summary": {
+       "type": "object",
+       "maxProperties": 16,
+       "propertyNames": {
+        "pattern": "^[0-9]{1,9}$"
+       },
+       "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "n",
+         "mean"
+        ],
+        "properties": {
+         "n": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+         },
+         "mean": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+         },
+         "p50": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+         },
+         "prefix_fail": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+         },
+         "capped": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+         }
+        }
+       }
+      },
+      "items": {
+       "type": "array",
+       "maxItems": 400,
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "id",
+         "length",
+         "ratio"
+        ],
+        "properties": {
+         "id": {
+          "type": "string",
+          "maxLength": 32
+         },
+         "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+         },
+         "ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+         },
+         "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+         }
+        }
+       }
+      }
+     }
+    },
+    {
+     "type": "null"
+    }
+   ]
   }
  }
 }
