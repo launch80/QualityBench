@@ -1,11 +1,13 @@
-"""Tasks QualityBench runs itself: teacher-forced logprobs, needle retrieval and spec parity."""
+"""Tasks QualityBench runs itself: teacher-forced logprobs, needle retrieval, MRCR 8-needle and spec parity."""
 from __future__ import annotations
 
 import hashlib
 import json
 import math
+import statistics
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import numpy as np
@@ -205,6 +207,183 @@ def run_needle(ctx: Ctx, client: qhttp.Client) -> None:
                for L in lengths}
     ctx.path("needle.json").write_text(json.dumps({"model": ctx.model, "summary": summary, "items": its}, indent=1))
     emit("needle", state="scored", correct=sum(d["correct"] for d in its), total=len(its))
+
+
+# ------------------------------------------------------------------ mrcr (openai/mrcr, 8 needles)
+
+MRCR_MAX_TOKENS = 2048  # the reply cap with thinking off: the longest pinned answer is 784 o200k tokens
+MRCR_FIT = 1.10         # a model's tokenizer counts a few % more tokens than o200k on this English text (Qwen3.8: 1.05-1.07)
+MRCR_PARALLEL = 2       # prefill-bound, 33k-128k tokens each: two in flight keep a server busy without 8 x 128k of KV
+
+
+def mrcr_pinned(quick: bool) -> list[dict]:
+    """The pinned items (qualitybench/data/mrcr-ids.json) sorted by (length, id); quick = every tenth of that order."""
+    doc = json.loads(envs.pkg_file("data", "mrcr-ids.json").read_text())
+    key = lambda i: (i["length"], i["id"])
+    return quick_pick(doc["items"], key=key) if quick else sorted(doc["items"], key=key)
+
+
+def grade_mrcr(response: str, answer: str, prefix: str) -> float:
+    """The dataset card's grader, unchanged: 0 unless the reply starts with the random prefix, else the
+    SequenceMatcher ratio of what follows the prefix in the reply and in the expected answer."""
+    if not response.startswith(prefix):
+        return 0.0
+    return float(SequenceMatcher(None, response.removeprefix(prefix), answer.removeprefix(prefix)).ratio())
+
+
+def ensure_mrcr(ctx: Ctx) -> Path:
+    """Fetch openai/mrcr and extract the pinned rows once (in the lmeval env). The text is fixed, so unlike the
+    needle prompts this does not depend on the model's tokenizer and needs no --tokenizer."""
+    f = envs.mrcr_inputs()
+    if not f.is_file():
+        envs.ensure_venv("lmeval")
+        log_to(ctx, "mrcr: fetching openai/mrcr (8-needle, about 460 MB) and extracting the pinned items (one time)")
+        try:
+            ctx.sh(envs.mrcr_build_cmd(f.parent), "mrcr", env=envs.harness_env())
+        except TaskFailed as e:
+            why = getattr(e, "last", "")
+            if why.startswith("mrcr: "):
+                raise TaskFailed(f"{why.removeprefix('mrcr: ')} (see {ctx.side.name}/run.log)")
+            raise
+    return f
+
+
+def server_context(client: qhttp.Client, model: str) -> int | None:
+    """The server's context length from /v1/models (vLLM and radiance list max_model_len), else None."""
+    try:
+        d = client.get("/v1/models")
+    except (OSError, qhttp.HTTPError, ValueError):
+        return None
+    for m in d.get("data") or []:
+        if m.get("id") == model:
+            for k in ("max_model_len", "context_length", "max_context_length"):
+                v = m.get(k)
+                if isinstance(v, int) and v > 0:
+                    return v
+    return None
+
+
+def mrcr_summary(its: list[dict]) -> dict:
+    """Per length: items, mean and median ratio, replies that missed the prefix, replies cut at the token cap, and the
+    mean prompt and reply tokens as the server counted them (plus the thinking share when the server reports it)."""
+    out = {}
+    for L in sorted({d["length"] for d in its}):
+        rows = [d for d in its if d["length"] == L]
+        xs = [d["ratio"] for d in rows]
+        s = {"n": len(xs), "mean": round(statistics.fmean(xs), 4), "p50": round(statistics.median(xs), 4),
+             "prefix_fail": sum(1 for d in rows if not d.get("prefix_ok", True)),
+             "capped": sum(1 for d in rows if d.get("finish") == "length"),
+             "prompt_tokens": int(statistics.fmean(d.get("prompt_tokens") or 0 for d in rows) + 0.5),
+             "completion_tokens": int(statistics.fmean(d.get("completion_tokens") or 0 for d in rows) + 0.5)}
+        think = [d["reasoning_tokens"] for d in rows if d.get("reasoning_tokens") is not None]
+        if think:
+            s["reasoning_tokens"] = int(statistics.fmean(think) + 0.5)
+        out[str(L)] = s
+    return out
+
+
+def run_mrcr(ctx: Ctx, client: qhttp.Client) -> None:
+    data = json.loads(ensure_mrcr(ctx).read_text())
+    rows = {it["id"]: it for it in data["items"]}
+    pinned = mrcr_pinned(ctx.quick)
+    missing = [p["id"] for p in pinned if p["id"] not in rows]
+    if missing:
+        raise TaskFailed(f"{len(missing)} pinned items are not in {envs.mrcr_inputs()}; delete that file and rerun to rebuild it")
+    out = ctx.path("mrcr-items.jsonl")
+    have: dict[str, dict] = {}
+    if out.is_file():
+        for line in open(out):
+            d = json.loads(line)
+            have[d["id"]] = d
+    emit("mrcr", done=len(have), total=len(pinned))
+    limit = server_context(client, ctx.model)
+    if limit:
+        log_to(ctx, f"mrcr: the server's context is {limit} tokens")
+    # Shortest first within a length: a prompt the server refuses tells us every longer one of that length fails too.
+    todo = [p for p in sorted(pinned, key=lambda p: (p["length"], p["tokens"])) if p["id"] not in have]
+    skipped: dict[int, int] = {}
+    refused: dict[int, int] = {}
+    lock = threading.Lock()
+    floor = ctx.think_min_tokens if ctx.thinking == "on" else MRCR_MAX_TOKENS
+
+    def cap_for(p) -> int:
+        """The reply's token cap: the thinking floor when the server's context has room for it after the prompt, else
+        the room left, never under MRCR_MAX_TOKENS. With thinking on the proxy honours it (qb_max_tokens_cap), so a
+        128k server runs the long conversations instead of refusing prompt + floor."""
+        if limit is None or floor <= MRCR_MAX_TOKENS:
+            return floor
+        return max(MRCR_MAX_TOKENS, min(floor, limit - int(p["tokens"] * MRCR_FIT)))
+
+    def ask(it, cap):
+        extra = {"qb_max_tokens_cap": cap} if ctx.thinking == "on" else {}
+        return client.chat(ctx.model, it["messages"], max_tokens=cap, temperature=0, **extra)
+
+    def one(p):
+        it = rows[p["id"]]
+        with lock:
+            # the o200k count is a lower bound for the server's own count: what cannot fit by it cannot fit at all
+            over = (limit is not None and p["tokens"] + MRCR_MAX_TOKENS > limit) or p["tokens"] >= refused.get(p["length"], 1 << 40)
+            if over:
+                skipped[p["length"]] = skipped.get(p["length"], 0) + 1
+                return
+        ctx.check_deadline()
+        cap = cap_for(p)
+        try:
+            try:
+                r = ask(it, cap)
+            except qhttp.HTTPError as e:
+                if e.status != 400 or cap <= MRCR_MAX_TOKENS:
+                    raise
+                log_to(ctx, f"mrcr {p['id']} ({p['tokens']} tokens): refused with a {cap}-token reply cap; retrying with {MRCR_MAX_TOKENS}")
+                cap = MRCR_MAX_TOKENS
+                r = ask(it, cap)
+        except qhttp.HTTPError as e:
+            if e.status == 400:  # longer than the server's context: skip it and every longer prompt of this length
+                with lock:
+                    refused[p["length"]] = min(refused.get(p["length"], p["tokens"]), p["tokens"])
+                    skipped[p["length"]] = skipped.get(p["length"], 0) + 1
+                log_to(ctx, f"mrcr {p['id']} ({p['tokens']} tokens): the server refused the prompt ({e}); skipping it and longer ones")
+                return
+            raise
+        ch = r["choices"][0]
+        reply = ch["message"].get("content") or ""
+        u = r.get("usage") or {}
+        d = {"id": p["id"], "length": p["length"], "ratio": round(grade_mrcr(reply, it["answer"], it["prefix"]), 4),
+             "prefix_ok": reply.startswith(it["prefix"]), "prompt_tokens": u.get("prompt_tokens") or 0,
+             "completion_tokens": u.get("completion_tokens") or 0, "finish": ch.get("finish_reason") or "", "max_tokens": cap}
+        rt = (u.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        if rt is not None:  # vLLM and radiance count the thinking inside completion_tokens; keep it apart when they say
+            d["reasoning_tokens"] = int(rt)
+        with lock:
+            with open(out, "a") as f:
+                f.write(json.dumps(d) + "\n")
+            have[p["id"]] = d
+            emit("mrcr", throttle=2, done=len(have), total=len(pinned))
+
+    with ThreadPoolExecutor(max(1, min(MRCR_PARALLEL, ctx.concurrency))) as ex:
+        futs = [ex.submit(one, p) for p in todo]
+        try:
+            for f in futs:
+                f.result()
+        except BaseException:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+    if skipped:
+        n_at = {L: sum(1 for p in pinned if p["length"] == L) for L in skipped}
+        parts = ", ".join(f"{n} of {n_at[L]} at {L // 1024}k" for L, n in sorted(skipped.items()))
+        why = f"over the server's context ({limit} tokens)" if limit else "refused by the server as too long"
+        ctx.mark_partial("mrcr", f"mrcr: {parts} skipped, {why}")
+    its = [have[p["id"]] for p in pinned if p["id"] in have]
+    summary = mrcr_summary(its)
+    ctx.path("mrcr.json").write_text(json.dumps({"model": ctx.model, "n_needles": data["meta"].get("n_needles", 8),
+                                                 "summary": summary, "items": its}, indent=1))
+    score = round(100 * statistics.fmean(d["ratio"] for d in its), 2) if its else None
+    for L, s in summary.items():
+        think = f", {s['reasoning_tokens']:,} of them thinking" if "reasoning_tokens" in s else ""
+        log_to(ctx, f"mrcr {int(L) // 1024}k: {s['n']} items, mean match ratio {s['mean']:.4f} (median {s['p50']:.4f}), "
+                    f"{s['prefix_fail']} missed the prefix, {s['capped']} hit the token cap; "
+                    f"{s['prompt_tokens']:,} prompt and {s['completion_tokens']:,} reply tokens per item{think}")
+    emit("mrcr", state="scored", done=len(its), total=len(pinned), score=score)
 
 
 # ------------------------------------------------------------------ spec parity
