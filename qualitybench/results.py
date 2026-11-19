@@ -17,8 +17,6 @@ ENV_KEYS = ("date", "model", "precision", "engine", "gpu", "lm_eval", "evalplus"
 NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
 
 BASE_CAVEATS = {
-    "lcb": "LiveCodeBench v6 problems may predate the model's training cutoff, so absolute scores may be inflated by "
-           "contamination. This affects every run equally.",
     "gsm8k": "GSM8K (0-shot chat) is scored by the reply's final answer (\\boxed{} or '####', else the last bold "
              "quantity or 'Answer:', else the final sentence's last amount), compared numerically, so $7.00 matches 7. "
              "lm-eval's stock flexible-extract score, kept per item, misreads such replies and reads several points lower.",
@@ -151,8 +149,6 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
                             "the server may not honour it, so those replies hit the harnesses' token limits. Check the "
                             "server's chat template, or run with --thinking on.")
     caveats[:0] = cap_notes
-    if "lcb" in ran:
-        caveats.append(BASE_CAVEATS["lcb"])
     if "gsm8k" in ran:
         caveats.append(BASE_CAVEATS["gsm8k"])
     if ran & {"mmlu_pro", "bfcl"}:
