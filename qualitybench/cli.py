@@ -98,12 +98,15 @@ def main(argv: list[str] | None = None) -> int:
         build_parser().print_help()
         return 2
     if a.cmd == "tasks":
-        rows = [{"id": t.id, "label": t.label, "items": t.items, "measures": t.how, "default": t.default} for t in SUITE]
+        rows = [{"id": t.id, "label": t.label, "items": t.items, "measures": t.how, "default": t.default, "about": t.about}
+                for t in SUITE]
         if a.json:
             print(json.dumps(rows, indent=1))
         else:
             for r in rows:
                 print(f"{r['id']:<12} {r['items']:>5}  {'default ' if r['default'] else 'optional'}  {r['label']}: {r['measures']}")
+                if r["about"]:
+                    print(f"{'':<12} {'':>5}            {r['about']}")
         return 0
     if a.cmd == "estimate":
         import os
