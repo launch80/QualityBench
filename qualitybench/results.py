@@ -177,7 +177,8 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
         hashes["items:mrcr"] = item_hash([d["id"] for d in md["items"]])
         capped, n = sum(s.get("capped", 0) for s in md["summary"].values()), len(md["items"])
         if n and capped / n >= CAP_SHARE:
-            fix = ("raise --thinking-max-tokens" if env_raw.get("thinking") == "on" else
+            fix = ("the cap is --thinking-max-tokens, or on a shorter server the room its context leaves after the "
+                   "prompt (at least 2048); raise the first or use a longer context" if env_raw.get("thinking") == "on" else
                    f"the cap is {MRCR_MAX_TOKENS} tokens against answers of at most 784, so the model wrote far more than the asked-for piece")
             caveats.append(f"MRCR 8-needle: {capped} of {n} replies ({capped / n:.0%}) stopped at the token cap, so their match "
                            f"ratios understate the model; {fix}.")

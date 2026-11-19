@@ -379,3 +379,17 @@ def test_mmlu_pro_reads_markdown_answers_only_when_lm_eval_found_none(tmp_path):
                                      "target": want, "exact_match": em}) + "\n"
                          for i, (reply, got, want, em, _) in enumerate(rows)))
     assert [r["correct"] for r in from_lmeval(f, "mmlu_pro_law")] == [r[4] for r in rows]
+
+
+def test_proxy_task_cap_lowers_the_thinking_floor():
+    import json
+    from qualitybench.proxy import Proxy
+    body = lambda **kw: json.dumps({"model": "m", "messages": [], **kw}).encode()
+    on = Proxy("http://127.0.0.1:1", thinking="on", min_max_tokens=65536)
+    out = json.loads(on.rewrite("/v1/chat/completions", body(max_tokens=3000, qb_max_tokens_cap=3000)))
+    assert out["max_tokens"] == 3000 and "qb_max_tokens_cap" not in out
+    assert json.loads(on.rewrite("/v1/chat/completions", body(max_tokens=3000)))["max_tokens"] == 65536  # no cap: the floor
+    assert json.loads(on.rewrite("/v1/chat/completions", body(max_tokens=70000, qb_max_tokens_cap=3000)))["max_tokens"] == 70000  # never lowers the ask
+    for p in (Proxy("http://127.0.0.1:1", thinking="off"), Proxy("http://127.0.0.1:1")):  # the field never reaches the server
+        out = json.loads(p.rewrite("/v1/chat/completions", body(max_tokens=2048, qb_max_tokens_cap=2048)))
+        assert out["max_tokens"] == 2048 and "qb_max_tokens_cap" not in out

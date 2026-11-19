@@ -92,7 +92,7 @@ def mrcr_home(home, monkeypatch):  # noqa: F811
     items = [
         _item("aaaa000000000001", 65536, 1000, 1, "AbCdEfGh12"),                   # asks the 1st poem: exact
         _item("bbbb000000000002", 65536, 1200, 2, "AbCdEfGh13", answer_k=1),       # asks the 2nd, expects the 1st: partial
-        _item("cccc000000000003", 131072, 125000, 1, "AbCdEfGh14"),                # over the fake's 131072 context: never sent
+        _item("cccc000000000003", 131072, 130000, 1, "AbCdEfGh14"),                # 130000 + 2048 > the fake's 131072 context: never sent
         _item("dddd000000000004", 131072, 100000, 1, "AbCdEfGh15", pad=120_000),   # fits by the count, the server says 400
         _item("eeee000000000005", 131072, 90000, 1, "AbCdEfGh16"),
     ]
@@ -175,3 +175,23 @@ def test_compare_mrcr_arm(mrcr_home, tmp_path, capsys):
     finally:
         ref.close()
         test.close()
+
+
+def test_run_mrcr_thinking_on_fits_the_reply_in_the_context(mrcr_home, tmp_path):
+    fake = Fake(reasoning=True)
+    try:
+        out = tmp_path / "t.json"
+        assert main(_args(fake.url, out) + ["--thinking", "on", "--thinking-max-tokens", "60000"]) == 0
+        sent = {r[2]["messages"][-1]["content"].split()[1]: r[2] for r in fake.requests
+                if r[1].endswith("/chat/completions") and "Prepend" in r[2]["messages"][-1]["content"]}
+        # aaaa (1000 tokens) has room for the whole floor; eeee (90000 tokens) gets what the 131072 context leaves after 1.1x
+        assert sent["AbCdEfGh12"]["max_tokens"] == 60000 and sent["AbCdEfGh16"]["max_tokens"] == 131072 - 99000
+        assert sent["AbCdEfGh15"]["max_tokens"] == native.MRCR_MAX_TOKENS  # dddd: refused at its room cap, retried at the base cap
+        assert all("qb_max_tokens_cap" not in b for b in sent.values())
+        doc = json.loads(out.read_text())
+        by = {i["id"]: i for i in doc["mrcr"]["items"]}
+        assert set(by) == {"aaaa000000000001", "bbbb000000000002", "eeee000000000005"}
+        assert by["eeee000000000005"]["reasoning_tokens"] == 7 and doc["mrcr"]["summary"]["131072"]["reasoning_tokens"] == 7
+        assert "of which thinking" in (tmp_path / "t.html").read_text()
+    finally:
+        fake.close()

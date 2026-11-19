@@ -14,7 +14,9 @@
   (100 each), pinned by the sha256 of their prompt in `qualitybench/data/mrcr-ids.json`; the quick tier is
   every tenth. The text is fixed, so no tokenizer is needed; `setup` or the first run downloads about 460 MB
   of parquet once and keeps the 200 conversations under `<home>/inputs/mrcr`. A conversation over the server's
-  context is skipped and listed in `partials`. Results carry an `mrcr` block (per-length summary, per-item
+  context is skipped and listed in `partials`; with thinking on, a reply gets `--thinking-max-tokens` when the
+  context has room for it after the prompt, else the room left (at least 2048), so a 128k server runs the 64k
+  half whole and most of the 128k half instead of refusing prompt + floor. Results carry an `mrcr` block (per-length summary, per-item
   ratios), the report shows a tile and a section, and `compare` prints a paired delta with a bootstrap CI over
   the shared items (no McNemar: the outcome is a ratio, not right or wrong). It is in no default threshold.
   Greedy, two conversations in flight at a time (prefill-bound), run last under `--deadline`. The time estimate

@@ -211,8 +211,8 @@ def run_needle(ctx: Ctx, client: qhttp.Client) -> None:
 
 # ------------------------------------------------------------------ mrcr (openai/mrcr, 8 needles)
 
-MRCR_MAX_TOKENS = 2048  # the longest pinned answer is 784 o200k tokens; the proxy raises this with --thinking on
-MRCR_FIT = 1.15         # a model's tokenizer may count up to about 15 % more tokens than o200k on this English text
+MRCR_MAX_TOKENS = 2048  # the reply cap with thinking off: the longest pinned answer is 784 o200k tokens
+MRCR_FIT = 1.10         # a model's tokenizer counts a few % more tokens than o200k on this English text (Qwen3.8: 1.05-1.07)
 MRCR_PARALLEL = 2       # prefill-bound, 33k-128k tokens each: two in flight keep a server busy without 8 x 128k of KV
 
 
@@ -304,17 +304,39 @@ def run_mrcr(ctx: Ctx, client: qhttp.Client) -> None:
     skipped: dict[int, int] = {}
     refused: dict[int, int] = {}
     lock = threading.Lock()
+    floor = ctx.think_min_tokens if ctx.thinking == "on" else MRCR_MAX_TOKENS
+
+    def cap_for(p) -> int:
+        """The reply's token cap: the thinking floor when the server's context has room for it after the prompt, else
+        the room left, never under MRCR_MAX_TOKENS. With thinking on the proxy honours it (qb_max_tokens_cap), so a
+        128k server runs the long conversations instead of refusing prompt + floor."""
+        if limit is None or floor <= MRCR_MAX_TOKENS:
+            return floor
+        return max(MRCR_MAX_TOKENS, min(floor, limit - int(p["tokens"] * MRCR_FIT)))
+
+    def ask(it, cap):
+        extra = {"qb_max_tokens_cap": cap} if ctx.thinking == "on" else {}
+        return client.chat(ctx.model, it["messages"], max_tokens=cap, temperature=0, **extra)
 
     def one(p):
         it = rows[p["id"]]
         with lock:
-            over = (limit is not None and p["tokens"] * MRCR_FIT + MRCR_MAX_TOKENS > limit) or p["tokens"] >= refused.get(p["length"], 1 << 40)
+            # the o200k count is a lower bound for the server's own count: what cannot fit by it cannot fit at all
+            over = (limit is not None and p["tokens"] + MRCR_MAX_TOKENS > limit) or p["tokens"] >= refused.get(p["length"], 1 << 40)
             if over:
                 skipped[p["length"]] = skipped.get(p["length"], 0) + 1
                 return
         ctx.check_deadline()
+        cap = cap_for(p)
         try:
-            r = client.chat(ctx.model, it["messages"], max_tokens=MRCR_MAX_TOKENS, temperature=0)
+            try:
+                r = ask(it, cap)
+            except qhttp.HTTPError as e:
+                if e.status != 400 or cap <= MRCR_MAX_TOKENS:
+                    raise
+                log_to(ctx, f"mrcr {p['id']} ({p['tokens']} tokens): refused with a {cap}-token reply cap; retrying with {MRCR_MAX_TOKENS}")
+                cap = MRCR_MAX_TOKENS
+                r = ask(it, cap)
         except qhttp.HTTPError as e:
             if e.status == 400:  # longer than the server's context: skip it and every longer prompt of this length
                 with lock:
@@ -328,7 +350,7 @@ def run_mrcr(ctx: Ctx, client: qhttp.Client) -> None:
         u = r.get("usage") or {}
         d = {"id": p["id"], "length": p["length"], "ratio": round(grade_mrcr(reply, it["answer"], it["prefix"]), 4),
              "prefix_ok": reply.startswith(it["prefix"]), "prompt_tokens": u.get("prompt_tokens") or 0,
-             "completion_tokens": u.get("completion_tokens") or 0, "finish": ch.get("finish_reason") or ""}
+             "completion_tokens": u.get("completion_tokens") or 0, "finish": ch.get("finish_reason") or "", "max_tokens": cap}
         rt = (u.get("completion_tokens_details") or {}).get("reasoning_tokens")
         if rt is not None:  # vLLM and radiance count the thinking inside completion_tokens; keep it apart when they say
             d["reasoning_tokens"] = int(rt)
