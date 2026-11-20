@@ -515,6 +515,46 @@ def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
         native.ensure_inputs(Ctx(model="vllm", endpoint="x", side=tmp_path / "r.qb", tokenizer="org/m"), "evalset")
 
 
+def test_run_skips_tasks_whose_inputs_cannot_be_built(tmp_path, monkeypatch):
+    import sys
+    from qualitybench.context import Ctx
+    from qualitybench.runner import precheck_inputs
+    from qualitybench.tasks import native
+    script = tmp_path / "build_inputs.py"
+    script.write_text('raise SystemExit("tokenizer: gpt-6.1-sol is neither a local dir nor a Hugging Face repo you can read")\n')
+    monkeypatch.setenv("QUALITYBENCH_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(native.envs, "ensure_venv", lambda name: None)
+    monkeypatch.setattr(native.envs, "venv_python", lambda name: sys.executable)
+    monkeypatch.setattr(native.envs, "pkg_file", lambda *p: script)
+    ctx = Ctx(model="gpt-6.1-sol", endpoint="x", side=tmp_path / "r.qb")
+    ctx.load_state()
+    assert precheck_inputs(ctx, ["logprobs", "needle", "gsm8k"]) == ["gsm8k"]  # the non-tokenizing task is untouched
+    state = json.loads((tmp_path / "r.qb" / "state.json").read_text())["partials"]
+    for t in ("logprobs", "needle"):
+        assert "skipped before running" in state[t] and "neither a local dir" in state[t]
+
+
+def test_precheck_builds_inputs_and_keeps_runnable_tasks(tmp_path, monkeypatch):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import precheck_inputs
+    from qualitybench.tasks import native
+    what = []
+    monkeypatch.setattr(native, "ensure_inputs", lambda ctx, w: what.append(w))
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb")
+    ctx.load_state()
+    assert precheck_inputs(ctx, ["gsm8k", "needle", "logprobs"]) == ["gsm8k", "needle", "logprobs"]
+    assert what == ["needle", "evalset"]  # only the tokenizing tasks are probed
+
+
+def test_missing_eval_set_skips_logprobs(tmp_path):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import precheck_inputs
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb", eval_set=str(tmp_path / "nope.json"))
+    ctx.load_state()
+    assert precheck_inputs(ctx, ["logprobs"]) == []
+    assert "does not exist" in (tmp_path / "r.qb" / "state.json").read_text()
+
+
 def test_request_params_parse_nest_and_refuse_pinned_fields():
     from qualitybench.proxy import describe, parse_params
     p = parse_params(["reasoning_effort=high", "chat_template_kwargs.reasoning_budget=8192", "x.flag=true", "name=a=b"])
