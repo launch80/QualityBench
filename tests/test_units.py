@@ -372,3 +372,54 @@ def test_mmlu_pro_reads_markdown_answers_only_when_lm_eval_found_none(tmp_path):
                                      "target": want, "exact_match": em}) + "\n"
                          for i, (reply, got, want, em, _) in enumerate(rows)))
     assert [r["correct"] for r in from_lmeval(f, "mmlu_pro_law")] == [r[4] for r in rows]
+
+
+def test_upstream_send_retries_dns_failures(monkeypatch):
+    import socket as _socket
+    from qualitybench import proxy as pmod
+
+    class C:
+        def request(self, *a): pass
+
+    n = {"c": 0}
+
+    def flaky(url, timeout=None):
+        n["c"] += 1
+        if n["c"] < 3:
+            raise _socket.gaierror(-3, "Temporary failure in name resolution")
+        return C(), "/v1/chat/completions"
+    slept = []
+    monkeypatch.setattr(pmod.qhttp, "connect", flaky)
+    monkeypatch.setattr(pmod.qhttp, "track", lambda c: None)
+    monkeypatch.setattr(pmod.qhttp, "untrack", lambda c: None)
+    monkeypatch.setattr(pmod, "_sleep", slept.append)
+    conn = pmod.upstream_send("https://up/v1", "POST", "/v1/chat/completions", b"{}", {})
+    assert isinstance(conn, C) and n["c"] == 3 and slept == [1.5, 3.0]  # waits grow between tries
+
+
+def test_upstream_send_gives_up_after_last_dns_failure(monkeypatch):
+    import socket as _socket
+    from qualitybench import proxy as pmod
+
+    n = {"c": 0}
+
+    def dead(url, timeout=None):
+        n["c"] += 1
+        raise _socket.gaierror(-3, "Temporary failure in name resolution")
+    monkeypatch.setattr(pmod.qhttp, "connect", dead)
+    monkeypatch.setattr(pmod.qhttp, "track", lambda c: None)
+    monkeypatch.setattr(pmod.qhttp, "untrack", lambda c: None)
+    monkeypatch.setattr(pmod, "_sleep", lambda s: None)
+    with pytest.raises(_socket.gaierror):
+        pmod.upstream_send("https://up/v1", "POST", "/v1/chat/completions", b"{}", {})
+    assert n["c"] == pmod.CONNECT_RETRIES  # then the failure goes on as a normal 502
+
+
+def test_upstream_send_does_not_retry_other_errors(monkeypatch):
+    from qualitybench import proxy as pmod
+
+    def refused(url, timeout=None):
+        raise ConnectionRefusedError("connection refused")
+    monkeypatch.setattr(pmod.qhttp, "connect", refused)
+    with pytest.raises(ConnectionRefusedError):
+        pmod.upstream_send("https://up/v1", "POST", "/v1/chat/completions", b"{}", {})  # one attempt only

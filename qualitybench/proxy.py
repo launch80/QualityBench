@@ -9,14 +9,18 @@ It does four things the harnesses cannot:
 - adds the run's --request-param fields (e.g. reasoning_effort) to every chat request;
 - adds the endpoint's bearer key, so the key never reaches a harness's command line;
 - cancels the upstream generation when a harness drops its request (closes the upstream connection
-  as soon as the client's socket closes), so abandoned generations never pile up on the server.
+  as soon as the client's socket closes), so abandoned generations never pile up on the server;
+- retries the upstream connect when name resolution fails transiently (a few seconds of flaky DNS
+  then cost a whole task: nothing has reached the server before resolution, so retrying is safe);
 """
 from __future__ import annotations
 
 import copy
 import json
 import select
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import http as qhttp
@@ -79,6 +83,33 @@ def merge(into: dict, extra: dict) -> None:
             merge(into[k], v)
         else:
             into[k] = copy.deepcopy(v)  # the request is edited afterwards; never share the run's params
+
+
+def _sleep(s: float) -> None:  # indirection so tests can skip the waits
+    time.sleep(s)
+
+
+#: Connect attempts to the upstream; only DNS failures retry, because then nothing reached the server yet.
+CONNECT_RETRIES = 3
+
+
+def upstream_send(upstream: str, command: str, path: str, body: bytes | None, hdrs: dict):
+    """Connect and send one request to the upstream. Returns the tracked connection once sent."""
+    last: socket.gaierror | None = None
+    for i in range(CONNECT_RETRIES):
+        c = None
+        try:
+            c, _p = qhttp.connect(upstream, qhttp.TIMEOUT)
+            qhttp.track(c)
+            c.request(command, path, body, hdrs)
+            return c
+        except socket.gaierror as e:  # flaky name resolution; a fresh connect may well resolve it
+            if c is not None:
+                qhttp.untrack(c)
+            last = e
+            if i + 1 < CONNECT_RETRIES:
+                _sleep(1.5 * (i + 1))
+    raise last
 
 
 class Proxy:
@@ -168,8 +199,6 @@ class Proxy:
             protocol_version = "HTTP/1.1"
 
             def _fwd(self, body: bytes | None):
-                conn, _ = qhttp.connect(proxy.upstream, qhttp.TIMEOUT)
-                qhttp.track(conn)
                 done = threading.Event()
 
                 def watch():  # the client hung up while we wait: drop the upstream request too
@@ -184,14 +213,14 @@ class Proxy:
                             qhttp.hard_close(conn)
                             return
 
-                threading.Thread(target=watch, daemon=True).start()
                 try:
                     hdrs = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
                     if proxy.api_key:
                         hdrs["Authorization"] = f"Bearer {proxy.api_key}"
                     elif self.headers.get("Authorization"):
                         hdrs["Authorization"] = self.headers["Authorization"]
-                    conn.request(self.command, self.path, body, hdrs)
+                    conn = upstream_send(proxy.upstream, self.command, self.path, body, hdrs)  # retries flaky DNS
+                    threading.Thread(target=watch, daemon=True).start()
                     r = conn.getresponse()
                     self.send_response(r.status)
                     for k, v in r.getheaders():

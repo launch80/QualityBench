@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Flaky DNS no longer kills a task.** When the proxy cannot resolve the upstream for a moment, it now retries
+  the connect a few times before answering (nothing has reached the server before name resolution, so there is no
+  duplicate generation). Previously one bad streak of resolver failures burned through the harness's retries and
+  failed whatever task happened to be running.
+
 - **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
   so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
   88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.
