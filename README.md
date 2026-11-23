@@ -123,36 +123,22 @@ uses only earlier runs with the same params.
 
 ### Output tokens
 
-The proxy records `usage.completion_tokens` from every chat reply, for the scored tasks (not logprobs,
-needle or spec_parity). The report has a "How much the model writes" card after the accuracy chart, written
-for readers who do not know what a median is: per task, the typical reply (the median) and the whole
-benchmark (every token of every reply), each as "thinking off → thinking on" on a pair or "reference → arm"
-in a comparison, with the whole-benchmark multiplier and an "All tasks" total; a sentence names the share
-of thinking tokens when the server reported them. Its data is kept in `<name>.qb/tokens.json`, so
-`qualitybench report` redraws it.
-The same mean and median are published as one caveat (the report's Caveats), logged at each task's end, and
-printed by `compare`. Thinking models differ a lot in tokens spent for the same score: two quantized builds,
-or a "swift" and a "thinking-cap" variant, can match on accuracy while one writes half the tokens, and
-tokens are wall time. Greedy decoding on fixed items makes the medians comparable between runs. The mean is
-pulled up by replies cut at the token cap (the cap caveat says how many); the median is not. The counts are
-whatever the server reports, which on most servers includes the reasoning tokens. When every reply of a task
-also reports `usage.completion_tokens_details.reasoning_tokens` (radiance, vLLM with a reasoning parser, and
-the OpenAI API; servers without a reasoning parser do not), the table and the caveat add a thinking part,
-e.g. `GSM8K 251 (218), thinking 180 (150)`, and `compare` prints a second line. Compare quants on the same
-engine, and treat numbers across engines with care.
+Two runs can score the same while one writes half the tokens, and tokens are wall time. So the proxy records
+each reply's `usage.completion_tokens` as the server reports it (on most servers that includes the
+reasoning), for every scored task.
+
+The report's "How much the model writes" card shows per task the typical reply (median) and the whole
+benchmark, as "thinking off → thinking on" or "reference → arm". When the server also reports
+`reasoning_tokens` (vLLM with a reasoning parser, radiance, the OpenAI API), it shows the thinking share
+too. Each task's end logs the mean and median, and `compare` prints the change under each task:
 
 ```
   gsm8k: +0.30 pts (95% CI -0.80 to +1.40, McNemar p 0.62)
     tokens/reply: mean 1,234 -> 987 (-20%), median 900 -> 780 (-13%)
-    thinking/reply: mean 900 -> 500 (-44%), median 800 -> 450 (-44%)
 ```
 
-The percent is the test run against the reference. When only one of the two runs has counts for a task (the
-other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted), `compare`
-warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it. When a thinking-on run
-is paired with its thinking-off reference (`--thinking on --reference`), the caveat lists both, e.g.
-`GSM8K off 310 (310), on 4,633 (2,500)`. A task's counts are published only when every item's reply was
-counted, so a run resumed from a 0.4.0 `state.json`, or after a kill, has none for the tasks it resumed.
+Read the median: replies cut at the token cap pull the mean up. A task shows counts only when every reply
+was counted. Compare token counts between runs on the same engine.
 
 ### How long it will take
 
