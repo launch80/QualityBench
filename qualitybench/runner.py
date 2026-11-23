@@ -247,7 +247,7 @@ def run(a) -> int:
     return 1 if failed else 0
 
 
-RESUMABLE = ("humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
+RESUMABLE = ("gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
 
 
 def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
@@ -268,6 +268,8 @@ def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
                     f"reply (mean), {tk['median']:,} (median)")
     if st["length"]:
         log_to(ctx, f"{task}: {st['length']} of {st['replies']} replies stopped at the token cap (scored as wrong)")
+    if st.get("filtered"):
+        log_to(ctx, f"{task}: {st['filtered']} prompts refused by the server's content filter (scored as wrong)")
     if ctx.thinking is None and st["reasoning"]:
         log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning, but --thinking was "
                     "not set, so the harnesses' short token limits apply. Rerun with --thinking on "

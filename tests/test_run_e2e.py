@@ -327,11 +327,11 @@ def test_proxy_counts_capped_and_reasoning_replies(home):
                 c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
             c.post("/v1/completions", {"model": "fake", "prompt": [1, 2, 3], "max_tokens": 1})  # not a chat
             # the fake counts a reply's words as its output tokens: "answer to: hi" is 3, its reasoning "thinking..." 1
-            assert px.take_stats() == {"replies": 3, "length": 3, "reasoning": 3, "tokens": [3, 3, 3], "thinking": [1, 1, 1]}
-            assert px.take_stats() == {"replies": 0, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+            assert px.take_stats() == {"replies": 3, "length": 3, "reasoning": 3, "filtered": 0, "tokens": [3, 3, 3], "thinking": [1, 1, 1]}
+            assert px.take_stats() == {"replies": 0, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [], "thinking": []}
             fake.finish, fake.reasoning = "stop", False
             c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)  # no completion_tokens_details
-            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [3], "thinking": [None]}
+            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [3], "thinking": [None]}
             # thinking tokens as radiance sends them; junk ones count as unknown, never shift the two lists apart
             for det in (b'{"reasoning_tokens":36}', b'{"reasoning_tokens":true}', b'{"reasoning_tokens":-1}',
                         b'{"reasoning_tokens":2.0}', b'"n/a"'):
@@ -339,7 +339,7 @@ def test_proxy_counts_capped_and_reasoning_replies(home):
                          b'"usage":{"completion_tokens":41,"completion_tokens_details":' + det + b'}}')
             px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],'
                      b'"usage":{"completion_tokens_details":{"reasoning_tokens":36}}}')  # no total: neither is kept
-            assert px.take_stats() == {"replies": 6, "length": 0, "reasoning": 0, "tokens": [41] * 5,
+            assert px.take_stats() == {"replies": 6, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [41] * 5,
                                        "thinking": [36, None, None, None, None]}
             # streamed: usage arrives last, in a chunk with no choices; a reply without (valid) usage still counts
             px.tally(b'data: {"choices":[{"delta":{"content":"a b"},"finish_reason":null}]}\n\n'
@@ -347,15 +347,15 @@ def test_proxy_counts_capped_and_reasoning_replies(home):
                      b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\ndata: [DONE]\n\n')
             px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}]}')
             px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],"usage":{"completion_tokens":-1}}')
-            assert px.take_stats() == {"replies": 3, "length": 0, "reasoning": 0, "tokens": [2], "thinking": [None]}
+            assert px.take_stats() == {"replies": 3, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [2], "thinking": [None]}
             for junk in (b'"n/a"', b'{"completion_tokens":true}', b'{"completion_tokens":2.0}'):
                 px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],"usage":' + junk + b'}')
-            assert px.take_stats() == {"replies": 3, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+            assert px.take_stats() == {"replies": 3, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [], "thinking": []}
             # junk usage from the server must not spoil the reply the client already got
             fake.usage = "n/a"
             r = qhttp.Client(px.url, attempts=1).chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
             assert r["choices"][0]["message"]["content"] == "answer to: hi" and r["usage"] == "n/a"
-            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [], "thinking": []}
     finally:
         fake.close()
 
@@ -417,6 +417,23 @@ def test_run_reports_output_tokens_per_task(home, tmp_path, monkeypatch):
                  "ifeval": {"n": 1, "mean": 3, "median": 3, "thinking": {"mean": 1, "median": 1}}}
         assert json.loads((tmp_path / "on.qb" / "tokens.json").read_text()) == {"ref": ref_tk, "on": on_tk}
         assert embedded(tmp_path / "on.html") == {"ref": ref_tk, "on": on_tk}
+    finally:
+        fake.close()
+
+
+def test_proxy_answers_a_content_filtered_prompt_with_an_empty_reply(home):
+    fake = Fake(refuse="forbidden")
+    try:
+        with Proxy(fake.url) as px:
+            c = qhttp.Client(px.url)
+            r = c.chat("fake", [{"role": "user", "content": "a forbidden question"}], max_tokens=8)
+            assert r["choices"][0]["message"]["content"] == "" and r["choices"][0]["finish_reason"] == "content_filter"
+            assert r["usage"]["completion_tokens"] == 0
+            c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
+            with pytest.raises(qhttp.HTTPError):  # any other 400 goes through as it is
+                c.chat("fake", [{"role": "user", "content": "x" * 100_001}], max_tokens=8)
+            assert px.take_stats() == {"replies": 2, "length": 0, "reasoning": 0, "filtered": 1,
+                                       "tokens": [0, 3], "thinking": [None, None]}
     finally:
         fake.close()
 

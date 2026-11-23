@@ -166,6 +166,9 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
         c = caps.get(t)
         if t not in ran or not c or not c.get("replies"):
             continue
+        if c.get("filtered"):
+            cap_notes.append(f"{BY_ID[t].label}: the server's content filter refused {c['filtered']} of its prompts; "
+                             "they count as wrong, so this score understates the model.")
         share = c["length"] / c["replies"]
         if share >= CAP_SHARE:
             if c.get("thinking") == "on":

@@ -10,13 +10,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class Fake:
     def __init__(self, noise: float = 0.0, reasoning: bool = False, inline: bool = False, finish: str = "stop",
-                  mrcr_truncate: bool = False, usage=None):
+                  mrcr_truncate: bool = False, usage=None, refuse: str = ""):
         self.noise = noise          # shifts logprobs, so a "quantized" server differs from the reference
         self.reasoning = reasoning
         self.inline = inline        # reasoning inside content as <think>…</think> (no reasoning parser)
         self.finish = finish        # finish_reason of chat replies ("length": cut at max_tokens)
         self.mrcr_truncate = mrcr_truncate  # answer MRCR asks with half the piece, like a degraded model
         self.usage = usage          # replaces the usage of chat replies (e.g. "n/a": a server that sends junk)
+        self.refuse = refuse        # a chat prompt containing this gets Azure's content-filter 400
         self.requests = []
         self.aborted = threading.Event()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -59,6 +60,11 @@ class Fake:
                     text = body["messages"][-1]["content"]
                     if sum(len(x.get("content") or "") for x in body["messages"]) > 100_000:
                         return self._json({"error": {"message": "context too long"}}, 400)
+                    if fake.refuse and fake.refuse in text:  # as litellm passes on Azure's prompt filter
+                        return self._json({"error": {"message": "litellm.BadRequestError: Azure_aiException - The response "
+                                           "was filtered due to the prompt triggering Azure OpenAI's content management "
+                                           "policy.", "code": "content_filter", "param": "prompt",
+                                           "innererror": {"code": "ResponsibleAIPolicyViolation"}}}, 400)
                     m = re.search(r"magic number for the blue lighthouse is (\d+)", text)
                     mr = re.search(r"Prepend (\S+) to the (\d+)\w\w \(1 indexed\)", text)
                     if mr:  # an MRCR ask: the k-th assistant turn, with the prefix asked for

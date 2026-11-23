@@ -165,8 +165,8 @@ The first estimate for a model is rough: the probe measures the server's speed, 
 writes. After one run, the estimate uses that run's real times, kept in `timings.jsonl` in the QualityBench
 home (`~/.cache/qualitybench`). That file stays on this machine.
 
-To resume an interrupted run, run the same command again. Finished tasks, evalplus shards, LCB problems and
-logprob chunks are kept and skipped.
+To resume an interrupted run, run the same command again. Finished tasks, evalplus shards, LCB problems,
+lm-eval replies and logprob chunks are kept and skipped.
 
 ### Server requirements
 

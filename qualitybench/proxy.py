@@ -75,6 +75,31 @@ def describe(params: dict) -> str:
     return ", ".join(f"{k}={v if isinstance(v, str) else json.dumps(v)}" for k, v in flat(params))
 
 
+def filtered_reply(request: bytes | None, status: int, err: bytes) -> tuple[bytes, str] | None:
+    """The reply that stands in for a prompt the upstream's content filter refused, and its content type.
+
+    Azure's filter (ResponsibleAIPolicyViolation) answers some benchmark prompts with HTTP 400 every time. A
+    harness retries that until it gives up and takes the whole task down; an empty reply with finish_reason
+    content_filter instead scores the item wrong and lets the task finish. None for any other error.
+    """
+    if status != 400 or (b"content_filter" not in err and b"ResponsibleAIPolicyViolation" not in err):
+        return None
+    try:
+        req = json.loads(request or b"{}")
+    except ValueError:
+        req = {}
+    msg = {"role": "assistant", "content": ""}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    head = {"id": "qb-content-filter", "created": 0, "model": req.get("model", "")}
+    if req.get("stream"):
+        chunk = {**head, "object": "chat.completion.chunk",
+                 "choices": [{"index": 0, "delta": msg, "finish_reason": "content_filter"}], "usage": usage}
+        return b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n", "text/event-stream"
+    reply = {**head, "object": "chat.completion",
+             "choices": [{"index": 0, "message": msg, "finish_reason": "content_filter"}], "usage": usage}
+    return json.dumps(reply).encode(), "application/json"
+
+
 def merge(into: dict, extra: dict) -> None:
     for k, v in extra.items():
         if isinstance(v, dict) and isinstance(into.get(k), dict):
@@ -90,7 +115,7 @@ class Proxy:
         self.upstream = up[:-3] if up.endswith("/v1") else up
         self.api_key, self.thinking, self.min_max_tokens = api_key, thinking, min_max_tokens
         self._lock = threading.Lock()
-        self._stats = {"replies": 0, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+        self._stats = {"replies": 0, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [], "thinking": []}
         self.params = params or {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
@@ -109,10 +134,11 @@ class Proxy:
         self.server.server_close()
 
     def take_stats(self) -> dict:
-        """Chat replies seen since the last call: total, stopped by the token cap, with reasoning, the output
-        tokens of each reply that reported them, and of those the thinking tokens (None where not sent). Resets."""
+        """Chat replies seen since the last call: total, stopped by the token cap, with reasoning, stand-ins for
+        prompts the upstream's content filter refused (filtered_reply), the output tokens of each reply that
+        reported them, and of those the thinking tokens (None where not sent). Resets."""
         with self._lock:
-            out, self._stats = self._stats, {"replies": 0, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+            out, self._stats = self._stats, {"replies": 0, "length": 0, "reasoning": 0, "filtered": 0, "tokens": [], "thinking": []}
         return out
 
     def tally(self, body: bytes) -> None:
@@ -207,13 +233,29 @@ class Proxy:
                         hdrs["Authorization"] = self.headers["Authorization"]
                     conn.request(self.command, self.path, body, hdrs)
                     r = conn.getresponse()
+                    chat = self.path.rstrip("/").endswith("/chat/completions")
+                    if r.status == 400 and chat:
+                        err = r.read()
+                        sub = filtered_reply(body, r.status, err)
+                        data, ctype = sub or (err, r.getheader("Content-Type", "application/json"))
+                        self.send_response(200 if sub else 400)
+                        self.send_header("Content-Type", ctype)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self.wfile.write(data)
+                        if sub:
+                            with proxy._lock:
+                                proxy._stats["filtered"] += 1
+                            proxy.tally(data)
+                        return
                     self.send_response(r.status)
                     for k, v in r.getheaders():
                         if k.lower() not in ("transfer-encoding", "connection", "content-length"):
                             self.send_header(k, v)
                     self.send_header("Connection", "close")
                     self.end_headers()
-                    keep = [] if r.status == 200 and self.path.rstrip("/").endswith("/chat/completions") else None
+                    keep = [] if r.status == 200 and chat else None
                     size = 0
                     while chunk := r.read1(65536) if hasattr(r, "read1") else r.read(65536):
                         self.wfile.write(chunk)
