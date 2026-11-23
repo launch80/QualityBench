@@ -38,6 +38,10 @@ SUITE: list[Task] = [
          about="A seven-digit number hidden at ten depths in 32k and 128k tokens of filler text. Checks that one fact can still be found in a very long input."),
     Task("spec_parity", "Spec parity", 32, "greedy text, 256 tokens, compared across runs", default=False, cost=2,
          about="Whether the greedy output is identical with speculative decoding on and off, on fixed prompts. Any difference means the speculative path changes what the model says."),
+    # Opt-in until L80's suite.go carries it: 200 conversations of 33k-128k tokens, prefill-heavy, so it runs last.
+    Task("mrcr", "MRCR 8-needle", 200, "openai/mrcr: 8 identical asks in a 64k or 128k conversation, SequenceMatcher "
+         "ratio of the asked-for reply", default=False, cost=60,
+         about="Long-context retrieval (OpenAI MRCR): eight identical asks hidden in a 64k- or 128k-token conversation, graded as the reply's match to the asked-for text. Where needle saturates at 100%, quantization damage first shows."),
 ]
 
 #: Tasks scored per item as right/wrong (the "tasks" block of the results).
