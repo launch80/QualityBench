@@ -154,12 +154,15 @@ class Proxy:
                 self._stats["thinking"].append(th if type(th) is int and th >= 0 else None)  # one per tokens entry
 
     def rewrite(self, path: str, body: bytes) -> bytes:
-        if not path.rstrip("/").endswith("/chat/completions") or not (self.thinking or self.params):
+        if not path.rstrip("/").endswith("/chat/completions") or not (self.thinking or self.params or b"qb_max_tokens_cap" in body):
             return body
         try:
             d = json.loads(body)
         except ValueError:
             return body
+        # QualityBench's own field, never sent on: a task whose replies are short (mrcr) lowers the thinking floor
+        # for a request when the server's context has no room for the whole floor after a long prompt.
+        cap = d.pop("qb_max_tokens_cap", None)
         merge(d, self.params)
         if not self.thinking:
             return json.dumps(d).encode()
@@ -167,7 +170,8 @@ class Proxy:
         if self.thinking == "on":
             if self.min_max_tokens:
                 d.pop("max_completion_tokens", None)
-                d["max_tokens"] = max(d.get("max_tokens") or 0, self.min_max_tokens)
+                floor = min(self.min_max_tokens, int(cap)) if cap else self.min_max_tokens
+                d["max_tokens"] = max(d.get("max_tokens") or 0, floor)
             d.pop("stop", None)
         return json.dumps(d).encode()
 

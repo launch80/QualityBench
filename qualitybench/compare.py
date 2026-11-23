@@ -29,14 +29,26 @@ def default_thresholds() -> Path:
     return envs.pkg_file("data", "thresholds-default.md")
 
 
+def _bar(rule: str) -> float | None:
+    m = re.search(r"[-+]?\d+(?:\.\d+)?", rule)
+    return float(m.group()) if m else None
+
+
 def gates_from(rows: list[dict]) -> dict:
     g = dict(DEFAULT_GATES)
-    num = lambda s: (m := re.search(r"[-+]?\d+(?:\.\d+)?", s)) and float(m.group())
     by = {r["id"]: r["rule"] for r in rows}
     for tid, key in (("T1", "ppl_delta_pct"), ("T3", "kld_mean"), ("T4", "top1_pct"), ("T5", "task_delta_pts")):
-        if tid in by and (v := num(by[tid])) is not None:
+        if tid in by and (v := _bar(by[tid])) is not None:
             g[key] = -abs(v) if key == "task_delta_pts" else v
     return g
+
+
+def code_ppl_gate(rows: list[dict], gates: dict) -> float:
+    """T2's own bar. The results format's `gates` has one perplexity field (T1's), so this one stays out of it."""
+    for r in rows:
+        if r["id"] == "T2" and (v := _bar(r["rule"])) is not None:
+            return v
+    return gates["ppl_delta_pct"]
 
 
 def arm_key(model: str) -> str:
@@ -83,6 +95,24 @@ def arm_block(ref_side: Path, test_side: Path, test_doc: dict, label: str | None
         tasks[t] = stats.paired(R, T)
     if tasks:
         out["tasks"] = tasks
+    rm, tm = ref_side / "mrcr.json", test_side / "mrcr.json"
+    if rm.is_file() and tm.is_file():
+        R = {d["id"]: (d["length"], d["ratio"]) for d in json.loads(rm.read_text())["items"]}
+        T = {d["id"]: (d["length"], d["ratio"]) for d in json.loads(tm.read_text())["items"]}
+        shared = sorted(R.keys() & T.keys())
+        if len(shared) < max(len(R), len(T)):
+            warn.append(f"mrcr: compared on the {len(shared)} items both runs answered (reference {len(R)}, test {len(T)}; "
+                        "a run skips the items over its server's context)")
+        if shared:
+            pv = stats.paired_values({i: R[i][1] for i in shared}, {i: T[i][1] for i in shared})
+            m = {"n": pv["n"], "ref": pv["ref"], "arm": pv["test"], "delta": pv["delta"], "ci": pv["ci"], "by_length": {}}
+            for L in sorted({R[i][0] for i in shared}):
+                ids = [i for i in shared if R[i][0] == L]
+                m["by_length"][str(L)] = {"n": len(ids), "ref": 100 * sum(R[i][1] for i in ids) / len(ids),
+                                          "arm": 100 * sum(T[i][1] for i in ids) / len(ids)}
+            out["mrcr"] = m
+    elif rm.is_file() or tm.is_file():
+        warn.append("mrcr not compared: only one run has it")
     rp, tp = ref_side / "parity.json", test_side / "parity.json"
     if rp.is_file() and tp.is_file():
         from .tasks.native import parity_compare
@@ -132,14 +162,16 @@ def params_warning(ref_side: Path, test_side: Path) -> list[str]:
             "so the task deltas include that change"]
 
 
-def verdicts(arm: dict, gates: dict, ref_tasks: list[dict]) -> dict:
+def verdicts(arm: dict, gates: dict, ref_tasks: list[dict], ppl_code_pct: float | None = None) -> dict:
     v = {}
+    if ppl_code_pct is None:
+        ppl_code_pct = gates["ppl_delta_pct"]
     pct = lambda x: f"{x:+.2f} %"
     pl = arm.get("ppl", {})
     if "ppl-wiki" in pl:
         v["T1"] = {"value": pct(pl["ppl-wiki"]["delta_pct"]), "pass": pl["ppl-wiki"]["delta_pct"] <= gates["ppl_delta_pct"]}
     if "ppl-code" in pl:
-        v["T2"] = {"value": pct(pl["ppl-code"]["delta_pct"]), "pass": pl["ppl-code"]["delta_pct"] <= gates["ppl_delta_pct"]}
+        v["T2"] = {"value": pct(pl["ppl-code"]["delta_pct"]), "pass": pl["ppl-code"]["delta_pct"] <= ppl_code_pct}
     if "kld" in arm:
         v["T3"] = {"value": f"{arm['kld']['mean']:.4f} nats", "pass": arm["kld"]["mean"] <= gates["kld_mean"]}
     if "top1" in arm:
@@ -182,7 +214,7 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
     rows = parse_thresholds(tpath)
     gates = gates_from(rows)
     doc["gates"] = gates
-    v = verdicts(arm, gates, ref.get("tasks", []))
+    v = verdicts(arm, gates, ref.get("tasks", []), code_ppl_gate(rows, gates))
     for r in rows:
         if r["id"] in v:
             r["results"] = {key: v[r["id"]]}
@@ -219,6 +251,10 @@ def summary_lines(doc: dict, key: str, ref_side: Path, test_side: Path) -> list[
             out.append(per("tokens", r, s))
             if "thinking" in r and "thinking" in s:
                 out.append(per("thinking", r["thinking"], s["thinking"]))
+    if "mrcr" in arm:
+        m = arm["mrcr"]
+        out.append(f"  mrcr: mean match {m['ref']:.2f} -> {m['arm']:.2f} ({m['delta']:+.2f} pts, 95% CI {m['ci'][0]:+.2f} to "
+                   f"{m['ci'][1]:+.2f}, {m['n']} conversations)")
     for th in doc.get("thresholds", []):
         r = (th.get("results") or {}).get(key)
         out.append(f"  {th['id']} {'PASS' if r and r['pass'] else 'FAIL' if r else 'n/a '} {r['value'] if r else ''}  ({th['rule']})")

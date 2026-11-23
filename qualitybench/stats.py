@@ -57,6 +57,24 @@ def paired(ref: dict[str, bool], test: dict[str, bool], resamples: int = RESAMPL
             "ref_only": b, "test_only": c, "p": mcnemar_p(b, c)}
 
 
+def paired_values(ref: dict[str, float], test: dict[str, float], resamples: int = RESAMPLES) -> dict:
+    """Test minus reference of a per-item score in [0, 1] (MRCR match ratios) over the same items.
+
+    Means and the delta are in points (x100), with the same paired bootstrap as `paired` (seed 608). There is
+    no McNemar test: the outcome is a ratio, not right or wrong.
+    """
+    if ref.keys() != test.keys():
+        raise ValueError(f"item sets differ: {len(ref.keys() ^ test.keys())} ids not shared")
+    ids = sorted(ref)
+    n = len(ids)
+    diffs = [test[i] - ref[i] for i in ids]
+    rng = random.Random(SEED)
+    boots = sorted(sum(diffs[rng.randrange(n)] for _ in range(n)) / n for _ in range(resamples))
+    lo, hi = boots[int(0.025 * resamples)], boots[int(0.975 * resamples) - 1]
+    return {"n": n, "ref": 100 * sum(ref.values()) / n, "test": 100 * sum(test.values()) / n,
+            "delta": 100 * sum(diffs) / n, "ci": [100 * lo, 100 * hi]}
+
+
 def tokens_summary(tokens: list[int], thinking: list[int | None] | None = None) -> dict | None:
     """Output tokens per reply: how many replies, mean and median rounded to whole tokens. None without any.
 

@@ -46,7 +46,7 @@ def preflight(ctx: Ctx, client: qhttp.Client) -> None:
                          "(vLLM --reasoning-parser) and a chat template that honours enable_thinking")
 
 
-OUTPUTS = {"logprobs": "logprobs.npz", "needle": "needle.json", "spec_parity": "parity.json"}
+OUTPUTS = {"logprobs": "logprobs.npz", "needle": "needle.json", "spec_parity": "parity.json", "mrcr": "mrcr.json"}
 
 
 def finished(ctx: Ctx, task: str) -> bool:
@@ -75,6 +75,8 @@ def run_task(ctx: Ctx, task: str, client: qhttp.Client) -> None:
         native.run_logprobs(ctx, client)
     elif task == "needle":
         native.run_needle(ctx, client)
+    elif task == "mrcr":
+        native.run_mrcr(ctx, client)
     elif task == "spec_parity":
         native.run_parity(ctx, client)
     if task in SCORED:
@@ -270,6 +272,9 @@ def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
         log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning, but --thinking was "
                     "not set, so the harnesses' short token limits apply. Rerun with --thinking on "
                     "--thinking-max-tokens 32768, or --thinking off")
+    if ctx.thinking == "off" and st["reasoning"]:
+        log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning although "
+                    "--thinking off was set; the server may not honour enable_thinking")
 
 
 def _write(ctx: Ctx, doc: dict, out: Path, tokens: dict | None = None) -> None:

@@ -113,10 +113,15 @@ not part of the results file.
 | logprobs | 592 windows × 2048 | yes |
 | needle | 20 (32k and 128k × 10 depths) | yes |
 | spec_parity | 32 | no, only when named |
+| mrcr | 200 (8-needle, 100 × 64k and 100 × 128k) | no, only when named |
 
 `internal/qualitybench/suite.go` holds the same table, with the measured
 minutes the TUI uses for estimates. The two must not drift: a task added to
-the tool is added here in the same release that pins it.
+the tool is added here in the same release that pins it. `mrcr` is new and
+stays opt-in until `suite.go` and the server schema
+(`bench-qualitybench-v1.ts`) carry it and its `mrcr` results block; a file
+with that block must be accepted (or the block dropped) before the task can
+become a default.
 
 ## Behaviour L80 relies on
 
@@ -160,6 +165,10 @@ validates it**, minus `$template`, which L80 adds. Requirements:
   home-directory path (`/home/`, `/Users/`, `~/`, `C:\Users\`) or a URL to
   localhost, a private address or a `.local` host anywhere in it.
 - `partials` lists every task cut short.
+- `mrcr`, when the task ran: `{"model", "n_needles": 8, "summary": {"65536": {"n", "mean",
+  "p50", "prefix_fail", "capped"}, "131072": {...}}, "items": [{"id", "length", "ratio",
+  "prompt_tokens"}]}`. `mean`, `p50` and `ratio` are SequenceMatcher ratios in [0, 1]; the report
+  shows them in percent. `hashes["items:mrcr"]` covers the item ids.
 
 The server requires at least one scored task. The `logprobs` block may be empty: servers
 without vLLM's `prompt_logprobs` extension (llama.cpp, radiance) can submit task scores alone, and
@@ -181,7 +190,11 @@ While running, the tool prints one line per update to stdout:
 qb:progress {"task":"gsm8k","done":120,"total":1319}
 qb:progress {"task":"gsm8k","state":"scored","correct":1147,"total":1319}
 qb:progress {"task":"lcb","state":"partial","done":88,"total":175}
+qb:progress {"task":"mrcr","state":"scored","done":200,"total":200,"score":71.3}
 ```
+
+`mrcr` is not right-or-wrong, so its scored line carries `done` and `score`
+(the mean match ratio in points) instead of `correct`.
 
 From 0.2.0, task lines carry `elapsed_s` (seconds since the task started), and
 a run line comes every 10 seconds and at each task change:

@@ -189,14 +189,37 @@ def lcb_docker_base(net: str, mounts: list[tuple[Path, str, str]], extra: list[s
     return container_run(net, [(home() / "hf", "/hf", "rw"), *mounts], ["-e", "HOME=/tmp", "-e", "HF_HOME=/hf", *(extra or [])])
 
 
+def mrcr_inputs() -> Path:
+    """The pinned openai/mrcr rows, extracted once; fixed text, so not per tokenizer."""
+    return home() / "inputs" / "mrcr" / "mrcr-8needle.json"
+
+
+def mrcr_build_cmd(out_dir: Path) -> list:
+    return [venv_python("lmeval"), pkg_file("helpers", "build_mrcr.py"), "--ids", pkg_file("data", "mrcr-ids.json"),
+            "--out", out_dir]
+
+
+def ensure_mrcr_inputs() -> None:
+    f = mrcr_inputs()
+    if f.is_file():
+        return
+    ensure_venv("lmeval")
+    log("setup: fetching openai/mrcr (8-needle, about 460 MB) and extracting the pinned items")
+    _run(mrcr_build_cmd(f.parent), env=harness_env())
+
+
 def setup(tasks: list[str], sandbox: str = "docker") -> None:
     """Install what the given tasks need and fetch their datasets."""
     (home() / "hf").mkdir(parents=True, exist_ok=True)
     (home() / "xdg").mkdir(parents=True, exist_ok=True)
-    need_lm = set(tasks) & {"gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "logprobs", "needle"}
+    need_lm = set(tasks) & {"gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "logprobs", "needle", "mrcr"}
     if need_lm:
         ensure_venv("lmeval")
-        _run([venv_python("lmeval"), "-c", PREFETCH, ",".join(sorted(need_lm))], env=harness_env())
+        prefetch = need_lm - {"logprobs", "needle", "mrcr"}
+        if prefetch:
+            _run([venv_python("lmeval"), "-c", PREFETCH, ",".join(sorted(prefetch))], env=harness_env())
+    if "mrcr" in tasks:
+        ensure_mrcr_inputs()
     if "bfcl" in tasks:
         ensure_venv("bfcl")
     if set(tasks) & {"humaneval", "mbpp"} and sandbox == "docker":

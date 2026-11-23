@@ -13,11 +13,13 @@ from qualitybench.tasks.native import parity_compare
 
 
 def test_suite_matches_l80_table():
-    # L80's internal/qualitybench/suite.go holds the same ids, item counts and default flags.
+    # L80's internal/qualitybench/suite.go holds the same ids, item counts and default flags. mrcr is opt-in
+    # until the release that adds it there (docs/contract.md).
     want = [("gsm8k", 1319, True), ("ifeval", 541, True), ("mmlu_pro", 1000, True), ("humaneval", 164, True),
             ("mbpp", 378, True), ("bfcl", 400, True), ("lcb", 175, True), ("logprobs", 592, True),
-            ("needle", 20, True), ("spec_parity", 32, False)]
+            ("needle", 20, True), ("spec_parity", 32, False), ("mrcr", 200, False)]
     assert [(t.id, t.items, t.default) for t in suite.SUITE] == want
+    assert suite.run_order(["mrcr", "gsm8k", "bfcl"], deadline=True) == ["bfcl", "gsm8k", "mrcr"]  # the dearest task last
 
 
 def test_parse_tasks():
@@ -85,6 +87,18 @@ def test_parse_thresholds_default():
     assert gates_from(rows) == {"task_delta_pts": -2.0, "top1_pct": 93.0, "ppl_delta_pct": 3.0, "kld_mean": 0.05}
 
 
+def test_t2_is_scored_on_its_own_bar():
+    from qualitybench.compare import code_ppl_gate, gates_from, verdicts
+    rows = [{"id": "T1", "metric": "ppl wiki", "rule": "delta <= +3.0 %"},
+            {"id": "T2", "metric": "ppl code", "rule": "delta <= +1.0 %"}]
+    gates = gates_from(rows)
+    assert code_ppl_gate(rows, gates) == 1.0
+    assert code_ppl_gate(rows[:1], gates) == 3.0  # no T2 row: T1's bar, as before
+    arm = {"ppl": {"ppl-wiki": {"delta_pct": 2.0}, "ppl-code": {"delta_pct": 2.0}}}
+    v = verdicts(arm, gates, [], code_ppl_gate(rows, gates))
+    assert v["T1"]["pass"] and not v["T2"]["pass"]
+
+
 def _npz(path, logits, model, sha="x"):
     lp = logits - np.log(np.exp(logits).sum(-1, keepdims=True))
     o = np.argsort(-lp, -1)[..., :64]
@@ -140,6 +154,11 @@ def test_estimate_scales_with_server_speed_and_history():
     assert abs(fast["tasks"][0]["min"] - (ov + (19 - ov) / 4)) < 0.1
     think = e.estimate(["gsm8k"], False, "on", "m", ref, history=[])
     assert think["tasks"][0]["min"] > 3 * full["tasks"][0]["min"]
+    # mrcr is prefill-bound: thinking on changes nothing, a 10x faster prefill cuts it tenfold
+    mr = e.estimate(["mrcr"], False, "on", "m", ref, history=[])
+    assert mr["tasks"][0]["min"] == e.REF_MINUTES["mrcr"] and mr["tasks"][0]["items"] == 200
+    quick_fast = e.estimate(["mrcr"], True, "off", "m", {"decode_tps": 1, "prefill_tps": e.REF_PREFILL_TPS * 10}, history=[])
+    assert quick_fast["tasks"][0]["items"] == 20 and quick_fast["tasks"][0]["min"] < 3
     nothing = e.estimate(["gsm8k"], True, None, "m", None, history=[])
     assert nothing["source"] == "reference" and nothing["tasks"][0]["items"] == 132
     # an earlier quick run of this model: scale its wall time to the full item count
@@ -305,9 +324,8 @@ def test_output_tokens_caveat(tmp_path):
     # 19 counts for 20 items: a reply went uncounted (e.g. a killed run's first attempt), so no stats at all
     short = {"lcb": {**caps["lcb"], "tokens": lcb[:-1]}}
     assert not any(c.startswith(results.TOKENS_NOTE) for c in results.build(_side(tmp_path / "s", {"caps": short}, "off"))["caveats"])
-    assert doc["caveats"].index(note) < doc["caveats"].index(results.BASE_CAVEATS["lcb"])
     full = results.build(_side(tmp_path / "f", {"caps": caps}, "off"), notes=[f"n{i}" for i in range(11)])
-    assert note in full["caveats"] and results.BASE_CAVEATS["lcb"] not in full["caveats"]  # at 12, the base ones go first
+    assert note in full["caveats"]
     # before the --note caveats too: with 12 others ahead of it, a note gives way, not the tokens line
     on = results.build(_side(tmp_path / "o", {"caps": caps}, "on"), notes=[f"n{i}" for i in range(11)])
     assert on["caveats"][0].startswith("This run had thinking ON") and on["caveats"][1] == note
@@ -390,6 +408,36 @@ def test_record_caps_adds_up_resumed_tasks(tmp_path):
     _record_caps(ctx, "lcb", new())  # resumed again: both lists grow together
     caps = json.loads((tmp_path / "r.qb" / "state.json").read_text())["caps"]
     assert caps["lcb"]["tokens"] == [10, 20, 60, 60] and caps["lcb"]["thinking_tokens"] == [None, None, 40, 40]
+
+
+def test_cap_caveat_follows_thinking(tmp_path):
+    from qualitybench import results
+
+    def cav(thinking, reasoning):
+        caps = {"lcb": {"replies": 20, "length": 6, "reasoning": reasoning, "thinking": thinking}}
+        doc = results.build(_side(tmp_path / f"{thinking}{reasoning}", {"caps": caps}, thinking))
+        assert results.validate_shape(doc) == []
+        return " ".join(doc["caveats"])
+    on = cav("on", 20)
+    assert "understates the model; raise --thinking-max-tokens." in on and "reasoned in" not in on
+    off = cav("off", 3)
+    assert ("understates the model; 3 of them reasoned although thinking was off, so the server may not honour "
+            "enable_thinking: check its chat template, or run with --thinking on.") in off
+    assert "The model reasoned in 3 replies although thinking was off (enable_thinking=false)" in off
+    plain = cav("off", 0)
+    assert ("understates the model; with thinking off the harness's own limit applies (2048 tokens, 4096 for "
+            "LiveCodeBench) and the model writes longer replies than that.") in plain
+    assert "reasoned" not in plain and "--thinking on" not in plain
+
+
+def test_record_caps_warns_when_thinking_off_still_reasons(tmp_path):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import _record_caps
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb", thinking="off")
+    ctx.load_state()
+    _record_caps(ctx, "mmlu_pro", {"replies": 1000, "length": 125, "reasoning": 40, "tokens": [8] * 1000})
+    assert ("mmlu_pro: WARNING: 40 of 1000 replies had reasoning although --thinking off was set; the server may not "
+            "honour enable_thinking") in (tmp_path / "r.qb" / "run.log").read_text()
 
 
 def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
@@ -509,3 +557,17 @@ def test_report_embeds_output_tokens_outside_the_document(tmp_path, capsys):
     (tmp_path / "bare.json").write_text(res.read_text())
     assert main(["report", str(tmp_path / "bare.json")]) == 0
     assert "const T = null;" in (tmp_path / "bare.html").read_text() and not (tmp_path / "bare.qb").exists()
+
+
+def test_proxy_task_cap_lowers_the_thinking_floor():
+    import json
+    from qualitybench.proxy import Proxy
+    body = lambda **kw: json.dumps({"model": "m", "messages": [], **kw}).encode()
+    on = Proxy("http://127.0.0.1:1", thinking="on", min_max_tokens=65536)
+    out = json.loads(on.rewrite("/v1/chat/completions", body(max_tokens=3000, qb_max_tokens_cap=3000)))
+    assert out["max_tokens"] == 3000 and "qb_max_tokens_cap" not in out
+    assert json.loads(on.rewrite("/v1/chat/completions", body(max_tokens=3000)))["max_tokens"] == 65536  # no cap: the floor
+    assert json.loads(on.rewrite("/v1/chat/completions", body(max_tokens=70000, qb_max_tokens_cap=3000)))["max_tokens"] == 70000  # never lowers the ask
+    for p in (Proxy("http://127.0.0.1:1", thinking="off"), Proxy("http://127.0.0.1:1")):  # the field never reaches the server
+        out = json.loads(p.rewrite("/v1/chat/completions", body(max_tokens=2048, qb_max_tokens_cap=2048)))
+        assert out["max_tokens"] == 2048 and "qb_max_tokens_cap" not in out

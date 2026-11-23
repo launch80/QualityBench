@@ -12,14 +12,13 @@ from .suite import BY_ID, SCORED
 
 MAX_BYTES = 256 * 1024
 CAP_SHARE = 0.01  # a task whose replies hit the token cap this often gets a caveat
+MRCR_MAX_TOKENS = 2048  # the mrcr task's reply cap with thinking off (tasks/native.py)
 TOKENS_NOTE = "Output tokens per reply as the server counted them, mean (median): "
 ENV_KEYS = ("date", "model", "precision", "engine", "gpu", "lm_eval", "evalplus", "bfcl_eval", "evalplus_image",
             "sandbox", "thinking_on_min_max_tokens", "endpoint", "host")
 NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
 
 BASE_CAVEATS = {
-    "lcb": "LiveCodeBench v6 problems may predate the model's training cutoff, so absolute scores may be inflated by "
-           "contamination. This affects every run equally.",
     "gsm8k": "GSM8K (0-shot chat) is scored by the reply's final answer (\\boxed{} or '####', else the last bold "
              "quantity or 'Answer:', else the final sentence's last amount), compared numerically, so $7.00 matches 7. "
              "lm-eval's stock flexible-extract score, kept per item, misreads such replies and reads several points lower.",
@@ -169,16 +168,27 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
             continue
         share = c["length"] / c["replies"]
         if share >= CAP_SHARE:
-            fix = ("raise --thinking-max-tokens" if c.get("thinking") == "on" else
-                   "use --thinking on (with --thinking-max-tokens) or --thinking off")
+            if c.get("thinking") == "on":
+                fix = "raise --thinking-max-tokens"
+            elif c.get("thinking") == "off" and c.get("reasoning"):
+                fix = (f"{c['reasoning']} of them reasoned although thinking was off, so the server may not honour "
+                       "enable_thinking: check its chat template, or run with --thinking on")
+            elif c.get("thinking") == "off":
+                fix = ("with thinking off the harness's own limit applies (2048 tokens, 4096 for LiveCodeBench) "
+                       "and the model writes longer replies than that")
+            else:
+                fix = "use --thinking on (with --thinking-max-tokens) or --thinking off"
             cap_notes.append(f"{BY_ID[t].label}: {c['length']} of {c['replies']} replies ({share:.0%}) stopped at the "
                              f"token cap and count as wrong, so this score understates the model; {fix}.")
-    if not env_raw.get("thinking") or env_raw.get("thinking") == "server default":
-        seen = sum(c.get("reasoning", 0) for c in caps.values())
-        if seen:
-            cap_notes.insert(0, f"The model reasoned in {seen} replies, but thinking was left at the server's default, "
-                                "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
-                                "--thinking on or --thinking off.")
+    seen = sum(c.get("reasoning", 0) for c in caps.values())
+    if seen and (not env_raw.get("thinking") or env_raw.get("thinking") == "server default"):
+        cap_notes.insert(0, f"The model reasoned in {seen} replies, but thinking was left at the server's default, "
+                            "so the harnesses' short token limits (2048, 4096 for LiveCodeBench) applied. Rerun with "
+                            "--thinking on or --thinking off.")
+    elif seen and env_raw.get("thinking") == "off":
+        cap_notes.insert(0, f"The model reasoned in {seen} replies although thinking was off (enable_thinking=false); "
+                            "the server may not honour it, so those replies hit the harnesses' token limits. Check the "
+                            "server's chat template, or run with --thinking on.")
     caveats[:0] = cap_notes
     mm = lambda s: f"{s['mean']:,} ({s['median']:,})"
     per = lambda s: mm(s) + (f", thinking {mm(s['thinking'])}" if "thinking" in s else "")
@@ -194,8 +204,6 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
             tok.append(f"{r['label']} {', '.join(got)}")
     if tok:
         caveats.insert(notes_at(caveats), (TOKENS_NOTE + " · ".join(tok))[:600])
-    if "lcb" in ran:
-        caveats.append(BASE_CAVEATS["lcb"])
     if "gsm8k" in ran:
         caveats.append(BASE_CAVEATS["gsm8k"])
     if ran & {"mmlu_pro", "bfcl"}:
@@ -215,6 +223,19 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
     if (side / "needle.json").is_file():
         nd = json.loads((side / "needle.json").read_text())
         doc["needle"] = {"model": nd.get("model", model)[:200], "summary": nd["summary"], "items": nd["items"]}
+    if (side / "mrcr.json").is_file():
+        md = json.loads((side / "mrcr.json").read_text())
+        keep = ("id", "length", "ratio", "prompt_tokens", "completion_tokens", "reasoning_tokens")
+        doc["mrcr"] = {"model": md.get("model", model)[:200], "n_needles": md.get("n_needles", 8), "summary": md["summary"],
+                       "items": [{k: d[k] for k in keep if k in d} for d in md["items"]][:400]}
+        hashes["items:mrcr"] = item_hash([d["id"] for d in md["items"]])
+        capped, n = sum(s.get("capped", 0) for s in md["summary"].values()), len(md["items"])
+        if n and capped / n >= CAP_SHARE:
+            fix = ("the cap is --thinking-max-tokens, or on a shorter server the room its context leaves after the "
+                   "prompt (at least 2048); raise the first or use a longer context" if env_raw.get("thinking") == "on" else
+                   f"the cap is {MRCR_MAX_TOKENS} tokens against answers of at most 784, so the model wrote far more than the asked-for piece")
+            caveats.append(f"MRCR 8-needle: {capped} of {n} replies ({capped / n:.0%}) stopped at the token cap, so their match "
+                           f"ratios understate the model; {fix}.")
     if thresholds:
         doc["thresholds"] = parse_thresholds(thresholds)
         hashes["THRESHOLDS.md"] = file_hash(thresholds)
