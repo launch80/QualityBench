@@ -571,3 +571,18 @@ def test_proxy_task_cap_lowers_the_thinking_floor():
     for p in (Proxy("http://127.0.0.1:1", thinking="off"), Proxy("http://127.0.0.1:1")):  # the field never reaches the server
         out = json.loads(p.rewrite("/v1/chat/completions", body(max_tokens=2048, qb_max_tokens_cap=2048)))
         assert out["max_tokens"] == 2048 and "qb_max_tokens_cap" not in out
+
+
+def test_every_task_is_explained(capsys):
+    import json
+    from qualitybench import report
+    for t in suite.SUITE:
+        assert t.about and t.about.endswith(".") and len(t.about) <= 240 and t.about.isascii(), t.id
+    html = report.render({"title": "x", "model": "m", "tasks": []})
+    assert "/*__ABOUT__*/" not in html and all(t.about in html for t in suite.SUITE)  # every description ships in the page
+    assert "What the benchmarks measure" in html
+    assert main(["tasks", "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["id"] for r in rows] == [t.id for t in suite.SUITE] and all(r["about"] for r in rows)
+    assert main(["tasks"]) == 0
+    assert suite.BY_ID["gsm8k"].about in capsys.readouterr().out

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from ..context import sidecar_for
+from ..suite import SUITE
 
 _DIR = Path(__file__).parent
 
@@ -15,7 +16,8 @@ def render(doc: dict, tokens: dict | None = None) -> str:
     tpl = (_DIR / "template.html").read_text()
     # </script> inside a string must not end the script block
     data = lambda v: json.dumps(v, separators=(",", ":")).replace("</", "<\\/")
-    script = (_DIR / "report.js").read_text().replace("/*__TOKENS__*/null", data(tokens)).replace("/*__DATA__*/null", data(doc))
+    about = json.dumps({t.id: {"label": t.label, "about": t.about} for t in SUITE}, separators=(",", ":")).replace("</", "<\\/")
+    script = (_DIR / "report.js").read_text().replace("/*__TOKENS__*/null", data(tokens)).replace("/*__ABOUT__*/{}", about).replace("/*__DATA__*/null", data(doc))
     return tpl.replace("__TITLE__", html.escape(doc.get("title", "QualityBench"))).replace("/*__SCRIPT__*/", script)
 
 

@@ -64,6 +64,9 @@ section{background:var(--surface);border:1px solid var(--ring);border-radius:12p
 svg text{fill:var(--ink2);font:12px system-ui,-apple-system,"Segoe UI",sans-serif}
 svg .tick{fill:var(--muted);font-variant-numeric:tabular-nums}
 svg .lbl{fill:var(--ink)}
+svg .lbl.help{cursor:help;text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:var(--muted)}
+.tile.help{cursor:help}
+#tip .hint{display:block;color:var(--ink2);margin-top:5px;max-width:34ch}
 svg .val{fill:var(--ink2);font-variant-numeric:tabular-nums}
 details{margin-top:10px}
 summary{cursor:pointer;color:var(--ink2);font-size:13px}
@@ -108,10 +111,11 @@ footer{color:var(--muted);font-size:12.5px;margin-top:22px}
   <section id="s-tasks">
     <h2>Task accuracy</h2>
     <p class="lede">Greedy, temperature 0, same items for every run. Bars show accuracy and whiskers the 95% Wilson interval.
-      Thinking off is the gated reference; thinking on is exploratory.</p>
+      Thinking off is the gated reference; thinking on is exploratory. Hover a task name for what it measures.</p>
     <div class="legend"><span><i style="background:var(--s1)"></i>Thinking off (reference)</span><span><i style="background:var(--s2)"></i>Thinking on</span></div>
     <div class="chart" id="c-tasks"></div>
     <details><summary>Table view</summary><div id="t-tasks"></div></details>
+    <details id="about-tasks-d"><summary>What the benchmarks measure</summary><div id="about-tasks"></div></details>
   </section>
 
   <section id="s-tokens">
