@@ -1,4 +1,7 @@
 const D = /*__DATA__*/null;
+const ABOUT = /*__ABOUT__*/{};  // task id -> {label, about}: what each benchmark measures, from suite.py
+const about = id => (ABOUT[id] || {}).about || "";
+const hint = id => about(id) ? `<span class="hint">${esc(about(id))}</span>` : "";
 const $ = s => document.querySelector(s);
 const NS = "http://www.w3.org/2000/svg";
 const fmt = (v, d = 1) => (v == null || isNaN(v)) ? "–" : Number(v).toFixed(d);
@@ -63,14 +66,13 @@ function header() {
       tiles.push([fmt(best) + "%", "mean task accuracy", "unweighted, over the tasks above"]);
     }
   }
-  if (LP["ppl-wiki"]) tiles.push([fmt(LP["ppl-wiki"].ppl, 3), "perplexity, wikitext-2", `${LP["ppl-wiki"].windows} × ${LP["ppl-wiki"].window_tokens || LP["ppl-wiki"].positions + 1} tokens`]);
-  if (LP["ppl-code"]) tiles.push([fmt(LP["ppl-code"].ppl, 3), "perplexity, code", `${LP["ppl-code"].windows} × ${LP["ppl-code"].window_tokens || LP["ppl-code"].positions + 1} tokens`]);
-  if (nd.length) tiles.push([`${nd.filter(x => x.correct).length}/${nd.length}`, "needle retrievals", [...new Set(nd.map(x => x.length / 1024 + "k"))].join(" and ") + " context"]);
-  const mr = D.mrcr ? D.mrcr.items : [];
-  if (mr.length) tiles.push([fmt(100 * mr.reduce((a, x) => a + x.ratio, 0) / mr.length, 1) + "%", "MRCR 8-needle match", `${mr.length} conversations, ${[...new Set(mr.map(x => x.length / 1024 + "k"))].join(" and ")} context`]);
-  if (LP.kld) tiles.push([fmt(100 * LP.kld.mass_mean, 1) + "%", `probability in top-${(D.eval_meta || {}).topk || 64}`, `KLD set mean; 1st pct ${fmt(100 * LP.kld.mass_p01, 1)}%`]);
-  for (const [k, a] of ARMS) if (a.kld) tiles.push([fmt(a.kld.mean, 4), `mean KLD, ${a.label}`, a.top1 ? `top-1 agreement ${fmt(a.top1.agree, 2)}%` : "nats"]);
+  if (LP["ppl-wiki"]) tiles.push([fmt(LP["ppl-wiki"].ppl, 3), "perplexity, wikitext-2", `${LP["ppl-wiki"].windows} × ${LP["ppl-wiki"].window_tokens || LP["ppl-wiki"].positions + 1} tokens`, "logprobs"]);
+  if (LP["ppl-code"]) tiles.push([fmt(LP["ppl-code"].ppl, 3), "perplexity, code", `${LP["ppl-code"].windows} × ${LP["ppl-code"].window_tokens || LP["ppl-code"].positions + 1} tokens`, "logprobs"]);
+  if (nd.length) tiles.push([`${nd.filter(x => x.correct).length}/${nd.length}`, "needle retrievals", [...new Set(nd.map(x => x.length / 1024 + "k"))].join(" and ") + " context", "needle"]);
+  if (LP.kld) tiles.push([fmt(100 * LP.kld.mass_mean, 1) + "%", `probability in top-${(D.eval_meta || {}).topk || 64}`, `KLD set mean; 1st pct ${fmt(100 * LP.kld.mass_p01, 1)}%`, "logprobs"]);
+  for (const [k, a] of ARMS) if (a.kld) tiles.push([fmt(a.kld.mean, 4), `mean KLD, ${a.label}`, a.top1 ? `top-1 agreement ${fmt(a.top1.agree, 2)}%` : "nats", "logprobs"]);
   $("#tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="v">${esc(t[0])}</div><div class="l">${esc(t[1])}</div><div class="n">${esc(t[2])}</div></div>`).join("");
+  [...$("#tiles").children].forEach((d, i) => { if (tiles[i][3] && about(tiles[i][3])) { d.classList.add("help"); d.setAttribute("data-tip", `<b>${esc(ABOUT[tiles[i][3]].label)}</b>${hint(tiles[i][3])}`); } });
 }
 
 // ---------- task scoreboard: grouped horizontal bars + Wilson whiskers
@@ -84,12 +86,13 @@ function tasksChart() {
   xAxis(g, h - 22, [0, 20, 40, 60, 80, 100], sx, v => v + "%");
   D.tasks.forEach((t, i) => {
     const y = top + i * rowH;
-    txt(g, L - 10, y + (THINK ? 22 : 20), short(t.label, w), { class: "lbl", "text-anchor": "end" });
+    const lbl = txt(g, L - 10, y + (THINK ? 22 : 20), short(t.label, w), { class: about(t.id) ? "lbl help" : "lbl", "text-anchor": "end" });
+    if (about(t.id)) lbl.setAttribute("data-tip", `<b>${esc(t.label)}</b>${hint(t.id)}`);
     rows.forEach(([k, c, dy]) => {
       const r = t[k];
       if (!r) { if (k === "on") txt(g, sx(0) + 4, y + dy + 12, "thinking on: not run", { class: "tick" }); return; }
       const x0 = sx(0), x1 = sx(r.acc), bh = 14;
-      const tipS = `<b>${esc(t.label)}</b>${THINK ? " · thinking " + k : ""}<br>${r.k}/${r.n} = ${fmt(r.acc)}%<br>95% CI ${fmt(r.ci[0])}–${fmt(r.ci[1])}%`;
+      const tipS = `<b>${esc(t.label)}</b>${THINK ? " · thinking " + k : ""}<br>${r.k}/${r.n} = ${fmt(r.acc)}%<br>95% CI ${fmt(r.ci[0])}–${fmt(r.ci[1])}%${hint(t.id)}`;
       el("path", { d: `M${x0},${y + dy}H${Math.max(x0, x1 - 4)}a4,4 0 0 1 4,4v${bh - 8}a4,4 0 0 1 -4,4H${x0}Z`, fill: c, "data-tip": tipS }, g);
       el("line", { x1: sx(r.ci[0]), x2: sx(r.ci[1]), y1: y + dy + bh / 2, y2: y + dy + bh / 2, stroke: "var(--ink)", "stroke-width": 1.5, opacity: .55 }, g);
       txt(g, Math.max(sx(r.ci[1]), x1) + 6, y + dy + 11, fmt(r.acc) + "%", { class: "val" });
@@ -100,6 +103,18 @@ function tasksChart() {
   table("#t-tasks", head, D.tasks.map(t => [esc(t.label), esc(t.how), `${t.off.k}/${t.off.n} (${fmt(t.off.acc)}%)`, `${fmt(t.off.ci[0])}–${fmt(t.off.ci[1])}`]
     .concat(THINK ? [t.on ? `${t.on.k}/${t.on.n} (${fmt(t.on.acc)}%)` : '<span class="pending">not run</span>', t.on ? `${fmt(t.on.ci[0])}–${fmt(t.on.ci[1])}` : "–"] : [])),
     THINK ? [2, 3, 4, 5] : [2, 3]);
+  aboutList();
+}
+
+// ---------- what the benchmarks measure: every task this report has a result for, in plain words
+function aboutList() {
+  const ids = D.tasks.map(t => t.id);
+  if (Object.keys(LP).length) ids.push("logprobs");
+  if ((D.needle || {}).items && D.needle.items.length) ids.push("needle");
+  if (ARMS.some(([, a]) => a.spec_parity)) ids.push("spec_parity");
+  const rows = ids.filter(id => about(id)).map(id => [esc(ABOUT[id].label), esc(about(id))]);
+  if (!rows.length) { hide("#about-tasks-d"); return; }
+  table("#about-tasks", ["Benchmark", "What it measures"], rows);
 }
 
 // ---------- paired deltas (thinking on vs off, or an arm vs the reference) + discordant pairs
