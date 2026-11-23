@@ -31,7 +31,10 @@ REF_RUN = "Qwopus3.8-27B INT4 on one Arc Pro B65, vLLM 0.30, thinking off (2026-
 #: Full-run minutes per task on the reference run (thinking off). L80 keeps the same table
 #: (internal/qualitybench/suite.go RefMinutes) for when this tool can't be asked.
 REF_MINUTES = {"gsm8k": 19, "ifeval": 9, "mmlu_pro": 42, "humaneval": 22, "mbpp": 32, "bfcl": 4, "lcb": 17,
-               "logprobs": 16, "needle": 6, "spec_parity": 2}
+               "logprobs": 16, "needle": 6, "spec_parity": 2,
+               # mrcr was not part of the reference run: 14.3M prompt tokens at its 1280 tok/s prefill is about
+               # 3h05, plus the replies. A guess until a run of this model is in the history.
+               "mrcr": 200}
 
 #: The probe on the reference run's server (output tokens/s across 16 parallel chats; prompt tokens/s
 #: for one long prompt): the same model and box, measured three times on 2026-11-06 (229–235, 1267–1290).
@@ -42,14 +45,14 @@ REF_PREFILL_TPS = 1280.0
 #: runs where almost all the time was this: a 0.6B model on this machine (gsm8k 18 s, ifeval 22 s,
 #: mmlu_pro 28 s, bfcl 7 s) and a 1.7B on a rented 3090 through a tunnel (about 1.5-3x those).
 OVERHEAD_S = {"gsm8k": 15, "ifeval": 18, "mmlu_pro": 25, "humaneval": 25, "mbpp": 30, "bfcl": 5, "lcb": 35,
-              "logprobs": 10, "needle": 10, "spec_parity": 5}
+              "logprobs": 10, "needle": 10, "spec_parity": 5, "mrcr": 15}
 
 #: Seconds per item no server goes below. A logprobs window returns 2048 × 64 logprobs (about 0.7 MB
 #: of JSON), so over a tunnel it is bound by the network: 3.6 s a window on that quick run.
 FLOOR_S = {"logprobs": 1.5}
 
 #: Tasks bound by prompt processing rather than by generated text.
-PREFILL_TASKS = {"logprobs", "needle"}
+PREFILL_TASKS = {"logprobs", "needle", "mrcr"}
 
 #: Thinking on writes several times the text. A guess until a thinking-on run is in the history.
 THINK_FACTOR = 4.0
@@ -205,9 +208,11 @@ def probe(client: qhttp.Client, model: str, concurrency: int = 16, max_tokens: i
 def setup_minutes(tasks: list[str], sandbox: str) -> float:
     """Rough one-time install time for what these tasks still need (0 once set up)."""
     m = 0.0
-    lm = set(tasks) & {"gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "logprobs", "needle"}
+    lm = set(tasks) & {"gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "logprobs", "needle", "mrcr"}
     if lm and not _stamped("lmeval"):
         m += 4
+    if "mrcr" in tasks and not envs.mrcr_inputs().is_file():
+        m += 3  # about 460 MB of parquet to fetch and extract
     if "bfcl" in tasks and not _stamped("bfcl"):
         m += 2
     if set(tasks) & {"humaneval", "mbpp"} and sandbox == "docker" and not _image(envs.EVALPLUS_IMAGE):

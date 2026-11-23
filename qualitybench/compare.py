@@ -93,6 +93,24 @@ def arm_block(ref_side: Path, test_side: Path, test_doc: dict, label: str | None
         tasks[t] = stats.paired(R, T)
     if tasks:
         out["tasks"] = tasks
+    rm, tm = ref_side / "mrcr.json", test_side / "mrcr.json"
+    if rm.is_file() and tm.is_file():
+        R = {d["id"]: (d["length"], d["ratio"]) for d in json.loads(rm.read_text())["items"]}
+        T = {d["id"]: (d["length"], d["ratio"]) for d in json.loads(tm.read_text())["items"]}
+        shared = sorted(R.keys() & T.keys())
+        if len(shared) < max(len(R), len(T)):
+            warn.append(f"mrcr: compared on the {len(shared)} items both runs answered (reference {len(R)}, test {len(T)}; "
+                        "a run skips the items over its server's context)")
+        if shared:
+            pv = stats.paired_values({i: R[i][1] for i in shared}, {i: T[i][1] for i in shared})
+            m = {"n": pv["n"], "ref": pv["ref"], "arm": pv["test"], "delta": pv["delta"], "ci": pv["ci"], "by_length": {}}
+            for L in sorted({R[i][0] for i in shared}):
+                ids = [i for i in shared if R[i][0] == L]
+                m["by_length"][str(L)] = {"n": len(ids), "ref": 100 * sum(R[i][1] for i in ids) / len(ids),
+                                          "arm": 100 * sum(T[i][1] for i in ids) / len(ids)}
+            out["mrcr"] = m
+    elif rm.is_file() or tm.is_file():
+        warn.append("mrcr not compared: only one run has it")
     rp, tp = ref_side / "parity.json", test_side / "parity.json"
     if rp.is_file() and tp.is_file():
         from .tasks.native import parity_compare
@@ -193,6 +211,10 @@ def summary_lines(doc: dict, key: str) -> list[str]:
         out.append(f"  perplexity {s}: {p['ref']:.4f} -> {p['arm']:.4f} ({p['delta_pct']:+.2f} %)")
     for t, q in (arm.get("tasks") or {}).items():
         out.append(f"  {t}: {q['delta']:+.2f} pts (95% CI {q['ci'][0]:+.2f} to {q['ci'][1]:+.2f}, McNemar p {q['p']:.3g})")
+    if "mrcr" in arm:
+        m = arm["mrcr"]
+        out.append(f"  mrcr: mean match {m['ref']:.2f} -> {m['arm']:.2f} ({m['delta']:+.2f} pts, 95% CI {m['ci'][0]:+.2f} to "
+                   f"{m['ci'][1]:+.2f}, {m['n']} conversations)")
     for th in doc.get("thresholds", []):
         r = (th.get("results") or {}).get(key)
         out.append(f"  {th['id']} {'PASS' if r and r['pass'] else 'FAIL' if r else 'n/a '} {r['value'] if r else ''}  ({th['rule']})")
