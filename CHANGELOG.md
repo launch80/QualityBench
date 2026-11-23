@@ -10,6 +10,23 @@
 - **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
   so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
   88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.
+- **New opt-in task `mrcr` (MRCR 8-needle).** The `needle` task scores 100% at both lengths on current 27B
+  models, so it cannot see what a quantized KV cache or INT4 weights do to long context. `mrcr` runs the
+  openai/mrcr 8-needle conversations: eight identical asks hidden in a 64k or 128k conversation, and the
+  model must return the asked-for piece with a random prefix. It is graded exactly as the dataset card does:
+  0 unless the reply starts with the prefix, else the SequenceMatcher ratio of the reply to the expected text.
+  The score is the mean ratio in points. Items are the two length bins that fit a 128k context, kept whole
+  (100 each), pinned by the sha256 of their prompt in `qualitybench/data/mrcr-ids.json`; the quick tier is
+  every tenth. The text is fixed, so no tokenizer is needed; `setup` or the first run downloads about 460 MB
+  of parquet once and keeps the 200 conversations under `<home>/inputs/mrcr`. A conversation over the server's
+  context is skipped and listed in `partials`; with thinking on, a reply gets `--thinking-max-tokens` when the
+  context has room for it after the prompt, else the room left (at least 2048), so a 128k server runs the 64k
+  half whole and most of the 128k half instead of refusing prompt + floor. Results carry an `mrcr` block (per-length summary, per-item
+  ratios), the report shows a tile and a section, and `compare` prints a paired delta with a bootstrap CI over
+  the shared items (no McNemar: the outcome is a ratio, not right or wrong). It is in no default threshold.
+  Greedy, two conversations in flight at a time (prefill-bound), run last under `--deadline`. The time estimate
+  is a guess (about 3h20 on the reference box) until a run is in the history. The task stays opt-in until L80's
+  `suite.go` and the server's `bench-qualitybench-v1` schema carry it (docs/contract.md).
 
 ## 0.4.0 (2026-11-11)
 

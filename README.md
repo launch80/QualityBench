@@ -23,6 +23,7 @@ numbers side by side.
 | `lcb` | 175 | LiveCodeBench v6, fixed slice, sandboxed |
 | `logprobs` | 592 windows | teacher-forced top-64 over 2048-token windows: perplexity, and KLD / top-1 agreement in compare |
 | `needle` | 20 | a 7-digit needle at 10 depths in 32k and 128k of C4 text |
+| `mrcr` | 200 | MRCR 8-needle (openai/mrcr): eight identical asks hidden in a 64k or 128k conversation, scored as the mean SequenceMatcher ratio of the reply to the asked-for text, 100 conversations per length (optional; the long-context probe that still separates models, where `needle` is at 100%) |
 | `spec_parity` | 32 | greedy text, 256 tokens (optional; for speculative decoding on vs off) |
 
 The suite comes from the Qwopus3.8-27B BF16-vs-INT4 study (November 2026), which is also its regression test:
@@ -155,6 +156,14 @@ logprob chunks are kept and skipped.
   `--max-logprobs 64` and speculative decoding off (prompt logprobs are not exact under MTP).
 - **bfcl** scores the server's own tool-call parser, so enable it (for vLLM, `--enable-auto-tool-choice --tool-call-parser ...`).
 - **needle** needs a 128k context for its long half. A shorter server skips that length and says so in `partials`.
+- **mrcr** is opt-in: name it in `--tasks`. It sends whole conversations of 33k to 128k tokens, so its long half also
+  needs a 128k context; a conversation over the server's context is skipped and listed in `partials`, never scored.
+  The text is fixed, so it needs no `--tokenizer`. The first run (or `setup`) downloads about 460 MB of the
+  openai/mrcr dataset once and keeps the 200 pinned conversations under `~/.cache/qualitybench/inputs/mrcr`.
+  Replies are capped at 2048 tokens with thinking off (the longest expected answer is 784). With `--thinking on`
+  a reply may use `--thinking-max-tokens` when the server's context has room for it after the prompt, else the
+  room left (at least 2048), so a 128k server still runs the 64k half whole and most of the 128k half; replies
+  that hit their cap are counted and reported. A 256k server runs all 200 conversations at any setting.
 - **logprobs is optional for publishing.** On a server without `prompt_logprobs` (llama.cpp, radiance), run
   `--tasks gsm8k,ifeval,mmlu_pro,humaneval,mbpp,bfcl,lcb,needle`. The results carry task scores only, and the page
   shows perplexity and KLD as n/a.

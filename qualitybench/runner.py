@@ -46,7 +46,7 @@ def preflight(ctx: Ctx, client: qhttp.Client) -> None:
                          "(vLLM --reasoning-parser) and a chat template that honours enable_thinking")
 
 
-OUTPUTS = {"logprobs": "logprobs.npz", "needle": "needle.json", "spec_parity": "parity.json"}
+OUTPUTS = {"logprobs": "logprobs.npz", "needle": "needle.json", "spec_parity": "parity.json", "mrcr": "mrcr.json"}
 
 
 def finished(ctx: Ctx, task: str) -> bool:
@@ -75,6 +75,8 @@ def run_task(ctx: Ctx, task: str, client: qhttp.Client) -> None:
         native.run_logprobs(ctx, client)
     elif task == "needle":
         native.run_needle(ctx, client)
+    elif task == "mrcr":
+        native.run_mrcr(ctx, client)
     elif task == "spec_parity":
         native.run_parity(ctx, client)
     if task in SCORED:

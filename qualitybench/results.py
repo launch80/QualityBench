@@ -12,6 +12,7 @@ from .suite import BY_ID, SCORED
 
 MAX_BYTES = 256 * 1024
 CAP_SHARE = 0.01  # a task whose replies hit the token cap this often gets a caveat
+MRCR_MAX_TOKENS = 2048  # the mrcr task's reply cap with thinking off (tasks/native.py)
 ENV_KEYS = ("date", "model", "precision", "engine", "gpu", "lm_eval", "evalplus", "bfcl_eval", "evalplus_image",
             "sandbox", "thinking_on_min_max_tokens", "endpoint", "host")
 NOTE_ENV = {"precision": "precision", "engine": "engine", "gpu": "gpu"}
@@ -168,6 +169,19 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
     if (side / "needle.json").is_file():
         nd = json.loads((side / "needle.json").read_text())
         doc["needle"] = {"model": nd.get("model", model)[:200], "summary": nd["summary"], "items": nd["items"]}
+    if (side / "mrcr.json").is_file():
+        md = json.loads((side / "mrcr.json").read_text())
+        keep = ("id", "length", "ratio", "prompt_tokens", "completion_tokens", "reasoning_tokens")
+        doc["mrcr"] = {"model": md.get("model", model)[:200], "n_needles": md.get("n_needles", 8), "summary": md["summary"],
+                       "items": [{k: d[k] for k in keep if k in d} for d in md["items"]][:400]}
+        hashes["items:mrcr"] = item_hash([d["id"] for d in md["items"]])
+        capped, n = sum(s.get("capped", 0) for s in md["summary"].values()), len(md["items"])
+        if n and capped / n >= CAP_SHARE:
+            fix = ("the cap is --thinking-max-tokens, or on a shorter server the room its context leaves after the "
+                   "prompt (at least 2048); raise the first or use a longer context" if env_raw.get("thinking") == "on" else
+                   f"the cap is {MRCR_MAX_TOKENS} tokens against answers of at most 784, so the model wrote far more than the asked-for piece")
+            caveats.append(f"MRCR 8-needle: {capped} of {n} replies ({capped / n:.0%}) stopped at the token cap, so their match "
+                           f"ratios understate the model; {fix}.")
     if thresholds:
         doc["thresholds"] = parse_thresholds(thresholds)
         hashes["THRESHOLDS.md"] = file_hash(thresholds)
