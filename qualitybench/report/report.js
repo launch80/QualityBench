@@ -2,6 +2,7 @@ const D = /*__DATA__*/null;
 const ABOUT = /*__ABOUT__*/{};  // task id -> {label, about}: what each benchmark measures, from suite.py
 const about = id => (ABOUT[id] || {}).about || "";
 const hint = id => about(id) ? `<span class="hint">${esc(about(id))}</span>` : "";
+const T = /*__TOKENS__*/null;
 const $ = s => document.querySelector(s);
 const NS = "http://www.w3.org/2000/svg";
 const fmt = (v, d = 1) => (v == null || isNaN(v)) ? "–" : Number(v).toFixed(d);
@@ -115,6 +116,42 @@ function aboutList() {
   const rows = ids.filter(id => about(id)).map(id => [esc(ABOUT[id].label), esc(about(id))]);
   if (!rows.length) { hide("#about-tasks-d"); return; }
   table("#about-tasks", ["Benchmark", "What it measures"], rows);
+}
+
+// ---------- how much the model writes (T: local data from beside the results file, not part of the document)
+function tokensTable() {
+  // the base run and, when there is one, the run it is read against: thinking on, or the gate arm
+  const arm = T && ARMS.find(([k]) => Object.keys((T.arms || {})[k] || {}).length);
+  const base = !T ? null : [T.on ? "thinking off" : arm ? "reference" : "this run", T.ref || {}];
+  const other = !T ? null : T.on ? ["thinking on", T.on] : arm ? [arm[1].label, T.arms[arm[0]]] : null;
+  const cols = [base, other].filter(Boolean);
+  const rows = D.tasks.filter(t => cols.some(([, c]) => c[t.id]));
+  if (!rows.length) { hide("#s-tokens"); return; }
+  const n = v => Math.round(v).toLocaleString("en-US");
+  const big = v => v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e4 ? Math.round(v / 1e3) + "k" : n(v);
+  const total = s => s.mean * s.n;  // whole tokens × replies: within half a token per reply of the exact sum
+  const ratio = (a, b) => b / a >= 1 ? `×${(b / a).toFixed(1)}` : `÷${(a / b).toFixed(1)}`;
+  const cell = (f, s, o) => other ? `${s ? f(s) : "–"} → ${o ? f(o) : "–"}` : s ? f(s) : "–";
+  const whole = (s, o) => cell(x => big(total(x)), s, o) + (other && s && o ? ` (${ratio(total(s), total(o))})` : "");
+  const body = rows.map(t => {
+    const s = base[1][t.id], o = other && other[1][t.id];
+    return [esc(t.label), cell(x => n(x.median), s, o), whole(s, o)];
+  });
+  // the whole suite, for each run that counted every task above
+  const sum = c => rows.every(t => c[t.id]) ? { n: 1, mean: rows.reduce((a, t) => a + total(c[t.id]), 0) } : null;
+  const all = cols.map(([, c]) => sum(c));
+  if (all.some(Boolean)) body.push(["<b>All tasks</b>", "", `<b>${whole(all[0], other ? all[1] : null)}</b>`]);
+  table("#t-tokens", ["Task", "Typical reply", "Whole benchmark"], body, [1, 2]);
+  // the lede's last sentence and the note under the table
+  const share = c => { const th = rows.filter(t => c[t.id] && c[t.id].thinking); if (!th.length) return null;
+    return 100 * th.reduce((a, t) => a + c[t.id].thinking.mean * c[t.id].n, 0) / th.reduce((a, t) => a + total(c[t.id]), 0); };
+  const thinkSide = other && share(other[1]) != null ? other[1] : share(base[1]) != null ? base[1] : null;
+  $("#tokens-how").textContent = [other ? `Each cell shows ${base[0]} → ${other[0]}.` : "",
+    thinkSide ? `Thinking made up ${Math.round(share(thinkSide))}% of the tokens ${other ? `with ${(thinkSide === other[1] ? other : base)[0]}` : "in this run"}.` : ""].filter(Boolean).join(" ");
+  const missing = cols.filter(([, c]) => rows.some(t => !c[t.id])).map(([l]) => l);
+  $("#tokens-note").textContent = "Typical reply: half the replies were shorter, half longer. Whole benchmark: every token " +
+    "for every question in the task, so replies that ran to the token limit count fully here but barely move the typical reply." +
+    (missing.length ? ` The server reported no token counts for some tasks of ${missing.join(" and ")}.` : "");
 }
 
 // ---------- paired deltas (thinking on vs off, or an arm vs the reference) + discordant pairs
@@ -337,5 +374,5 @@ function applyTheme() { const m = modes[mi]; if (m === "auto") document.document
 $("#theme").addEventListener("click", () => { mi = (mi + 1) % 3; try { localStorage.setItem("qb-theme", modes[mi]); } catch (e) {} applyTheme(); });
 applyTheme();
 function draw() { tasksChart(); thinkCharts(); lpCharts(); needleChart(); mrcrChart(); arms(); }
-header(); draw(); thresholds(); notes(); repro();
+header(); draw(); tokensTable(); thresholds(); notes(); repro();
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(draw, 120); });

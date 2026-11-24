@@ -27,6 +27,22 @@
   Greedy, two conversations in flight at a time (prefill-bound), run last under `--deadline`. The time estimate
   is a guess (about 3h20 on the reference box) until a run is in the history. The task stays opt-in until L80's
   `suite.go` and the server's `bench-qualitybench-v1` schema carry it (docs/contract.md).
+- **Output tokens per reply.** The proxy now records each chat reply's `usage.completion_tokens` as the
+  server reported it, for the scored tasks, in `<name>.qb/state.json`. A task's counts are published only
+  when every item's reply was counted; a task resumed after a kill, or from a 0.4.0 `state.json`, has none.
+  The results schema is unchanged: mean and median per task travel as one caveat, shown under Caveats in the
+  report, and each task's end logs a line such as
+  `gsm8k: 1319 replies, 1,234 output tokens per reply (mean), 987 (median)`. `compare` prints the change
+  under each task line and adds one caveat for the arm. When only one of the two runs has counts for a task
+  (the other was made with 0.4.0 or earlier, its server sent no `usage`, or not every reply was counted),
+  `compare` warns `output tokens not compared for <tasks>: ...` and prints no tokens line for it. When the
+  server also reports `usage.completion_tokens_details.reasoning_tokens` for every reply of a task, the
+  caveat and `compare` add a thinking part. The report gets a "How much the model writes" card for
+  non-technical readers: per task the typical reply (median) and the whole benchmark (all tokens), as
+  "thinking off → thinking on" or "reference → arm" with a multiplier, an "All tasks" total and the share of
+  thinking tokens; its data is written to `<name>.qb/tokens.json` so `qualitybench report` redraws it.
+- **`compare` refuses a comparison file as the reference.** Its `.qb` folder is never the reference run's
+  data, so deltas were scored against the wrong run; pass the run's own results file.
 
 ## 0.4.0 (2026-11-11)
 

@@ -1,11 +1,13 @@
 """A local pass-through in front of the endpoint that every harness talks to.
 
-It does four things the harnesses cannot:
+It does five things the harnesses cannot:
 - forces thinking on or off (chat_template_kwargs.enable_thinking), for servers you cannot restart;
   with thinking on it raises max_tokens to a floor and drops `stop` (vLLM matches stop strings
   inside the reasoning too);
 - counts chat replies that stopped at the token cap (finish_reason "length") and replies with reasoning,
-  so a run can say when a task's scores are cut short (take_stats);
+  and keeps each reply's output token count (usage.completion_tokens) and its thinking share
+  (usage.completion_tokens_details.reasoning_tokens, when the server sends it), so a run can say when a task's
+  scores are cut short and how long its replies were (take_stats);
 - adds the run's --request-param fields (e.g. reasoning_effort) to every chat request;
 - adds the endpoint's bearer key, so the key never reaches a harness's command line;
 - cancels the upstream generation when a harness drops its request (closes the upstream connection
@@ -88,7 +90,7 @@ class Proxy:
         self.upstream = up[:-3] if up.endswith("/v1") else up
         self.api_key, self.thinking, self.min_max_tokens = api_key, thinking, min_max_tokens
         self._lock = threading.Lock()
-        self._stats = {"replies": 0, "length": 0, "reasoning": 0}
+        self._stats = {"replies": 0, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
         self.params = params or {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
@@ -107,14 +109,15 @@ class Proxy:
         self.server.server_close()
 
     def take_stats(self) -> dict:
-        """Chat replies seen since the last call: total, stopped by the token cap, with reasoning. Resets."""
+        """Chat replies seen since the last call: total, stopped by the token cap, with reasoning, the output
+        tokens of each reply that reported them, and of those the thinking tokens (None where not sent). Resets."""
         with self._lock:
-            out, self._stats = self._stats, {"replies": 0, "length": 0, "reasoning": 0}
+            out, self._stats = self._stats, {"replies": 0, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
         return out
 
     def tally(self, body: bytes) -> None:
         """Count one chat/completions reply (JSON, or the SSE events of a streamed one)."""
-        fins, reasoning = [], False
+        fins, reasoning, usage = [], False, None
         text = body.decode("utf-8", "replace")
         docs = []
         if text.lstrip().startswith("{"):
@@ -130,6 +133,7 @@ class Proxy:
                     except ValueError:
                         pass
         for d in docs:
+            usage = d.get("usage") or usage  # a stream sends it last, in a chunk with no choices
             for ch in d.get("choices") or []:
                 m = ch.get("message") or ch.get("delta") or {}
                 if m.get("reasoning") or m.get("reasoning_content") or "<think>" in (m.get("content") or ""):
@@ -138,10 +142,16 @@ class Proxy:
                     fins.append(ch["finish_reason"])
         if not fins:
             return
+        n = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        det = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+        th = det.get("reasoning_tokens") if isinstance(det, dict) else None
         with self._lock:
             self._stats["replies"] += 1
             self._stats["length"] += fins[-1] == "length"
             self._stats["reasoning"] += reasoning
+            if type(n) is int and n >= 0:  # not a bool or a float
+                self._stats["tokens"].append(n)
+                self._stats["thinking"].append(th if type(th) is int and th >= 0 else None)  # one per tokens entry
 
     def rewrite(self, path: str, body: bytes) -> bytes:
         if not path.rstrip("/").endswith("/chat/completions") or not (self.thinking or self.params or b"qb_max_tokens_cap" in body):

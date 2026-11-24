@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+import statistics
 
 SEED = 608
 RESAMPLES = 10000
@@ -72,3 +73,17 @@ def paired_values(ref: dict[str, float], test: dict[str, float], resamples: int 
     lo, hi = boots[int(0.025 * resamples)], boots[int(0.975 * resamples) - 1]
     return {"n": n, "ref": 100 * sum(ref.values()) / n, "test": 100 * sum(test.values()) / n,
             "delta": 100 * sum(diffs) / n, "ci": [100 * lo, 100 * hi]}
+
+
+def tokens_summary(tokens: list[int], thinking: list[int | None] | None = None) -> dict | None:
+    """Output tokens per reply: how many replies, mean and median rounded to whole tokens. None without any.
+
+    With a thinking count for every reply (`thinking`, aligned with `tokens`) and not all zero, their mean and median too.
+    """
+    if not tokens:
+        return None
+    mm = lambda v: {"mean": round(statistics.mean(v)), "median": round(statistics.median(v))}
+    out = {"n": len(tokens), **mm(tokens)}
+    if thinking and len(thinking) == len(tokens) and None not in thinking and any(thinking):
+        out["thinking"] = mm(thinking)
+    return out

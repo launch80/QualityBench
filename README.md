@@ -55,8 +55,8 @@ qualitybench run --endpoint http://127.0.0.1:8000/v1 --model my-model --out resu
 This writes three things:
 - `results/bf16.json`: the results file, a summary under 256 KB (the `bench.qualitybench.v1` format launch80 renders).
 - `results/bf16.html`: a self-contained report with charts. It works offline.
-- `results/bf16.qb/`: per-item records, raw harness output, logprob arrays and `run.log`. `compare` needs this
-  folder, so keep it next to the results file. It is never part of a published payload.
+- `results/bf16.qb/`: per-item records, raw harness output, logprob arrays, `tokens.json` and `run.log`.
+  `compare` needs this folder, so keep it next to the results file. It is never part of a published payload.
 
 Useful options:
 
@@ -118,8 +118,27 @@ use `--thinking`. A higher reasoning effort writes longer reasoning, so raise `-
 it. A reply cut off before its answer is scored wrong.
 
 The params are part of the run: resuming with other params is refused. They are kept in `<name>.qb/ENV.json`,
-listed in the report's notes, and `compare` warns when the two runs sent different ones. The time estimate
+listed in the report's caveats, and `compare` warns when the two runs sent different ones. The time estimate
 uses only earlier runs with the same params.
+
+### Output tokens
+
+Two runs can score the same while one writes half the tokens, and tokens are wall time. So the proxy records
+each reply's `usage.completion_tokens` as the server reports it (on most servers that includes the
+reasoning), for every scored task.
+
+The report's "How much the model writes" card shows per task the typical reply (median) and the whole
+benchmark, as "thinking off → thinking on" or "reference → arm". When the server also reports
+`reasoning_tokens` (vLLM with a reasoning parser, radiance, the OpenAI API), it shows the thinking share
+too. Each task's end logs the mean and median, and `compare` prints the change under each task:
+
+```
+  gsm8k: +0.30 pts (95% CI -0.80 to +1.40, McNemar p 0.62)
+    tokens/reply: mean 1,234 -> 987 (-20%), median 900 -> 780 (-13%)
+```
+
+Read the median: replies cut at the token cap pull the mean up. A task shows counts only when every reply
+was counted. Compare token counts between runs on the same engine.
 
 ### How long it will take
 
@@ -182,10 +201,13 @@ qualitybench compare results/bf16.json results/int4.json --thresholds my-thresho
 ```
 
 This prints KLD, top-1 agreement, the perplexity change and a paired accuracy change per task (exact McNemar
-p plus a paired-bootstrap 95% CI), then a verdict per threshold. It writes `int4-vs-bf16.json` and `.html`:
-the reference's page with the test run drawn as an arm. Without `--thresholds`, compare uses the
-[default bars](qualitybench/data/thresholds-default.md), which are the study's pre-registered ones. Each
-threshold file's sha256 is recorded in the output.
+p plus a paired-bootstrap 95% CI), the change in output tokens per reply, then a verdict per threshold. It
+writes `int4-vs-bf16.json` and `.html` (and `int4-vs-bf16.qb/tokens.json`, the report table's data): the
+reference's page with the test run drawn as an arm. Without `--thresholds`, compare uses the [default
+bars](qualitybench/data/thresholds-default.md), which are the study's pre-registered ones. Each threshold
+file's sha256 is recorded in the output. The reference must be a run's own results file: `compare` refuses a
+comparison file as reference (`compare: <path> is a comparison; pass the reference run's own results file`),
+because a comparison's `.qb` folder is not the reference run's data.
 
 Both runs must use the same tier and tokenizer. Compare refuses logprobs scored on different eval sets, and
 it skips any task whose two runs answered different items.

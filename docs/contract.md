@@ -36,6 +36,14 @@ Flags L80 does not send by name, but may pass through: `--title`, `--concurrency
   request-shape fields are refused with exit 2. The params are part of the run's
   identity, kept in `<name>.qb/ENV.json` as `request_params`, and published as a
   caveat, since `env` has no field for them. `compare` warns when two runs differ.
+- The run publishes per-task output tokens (mean and median of `usage.completion_tokens`
+  per reply, scored tasks only) as one caveat string, since the schema has no field for
+  them. `compare` prints the change per task and adds one such caveat for the arm. Thinking
+  tokens (`usage.completion_tokens_details.reasoning_tokens`) are added to it when the
+  server reports them for every reply. The local report's table and
+  `<name>.qb/tokens.json` are not part of the published document. `compare` writes
+  `<out>.qb/tokens.json` (local, not published) and refuses a
+  comparison document as reference (exit 2).
 - `run` installs the harness environments it needs on first use (`setup` does it
   ahead of time); a run without network after setup needs no downloads.
 

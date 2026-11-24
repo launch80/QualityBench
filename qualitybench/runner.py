@@ -11,7 +11,7 @@ from pathlib import Path
 
 import sys
 
-from . import __version__, compare, envs, items, report, results
+from . import __version__, compare, envs, items, report, results, stats
 from . import estimate as qest
 from . import http as qhttp
 from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidecar_for
@@ -111,6 +111,8 @@ def run(a) -> int:
     out = Path(a.out).absolute()
     if not out.name.endswith(".json"):
         raise SystemExit("--out must name a .json results file")
+    if a.reference:  # before any work, not after the run
+        compare.refuse_comparison(Path(a.reference), json.loads(Path(a.reference).read_text()))
     tasks = parse_tasks(a.tasks)
     deadline = parse_deadline(a.deadline)
     side = sidecar_for(out)
@@ -225,16 +227,19 @@ def run(a) -> int:
             doc = results.build(ref_side, title=ref.get("title"), thresholds=a.thresholds, notes=a.note,
                                 on_side=side, on_src=out.stem)
             doc["env"] = ref.get("env", doc["env"])
+            tokens = results.report_tokens(doc, ref_side, on_side=side)
         else:
             doc, warn = compare.build(Path(a.reference), own, a.thresholds, a.arm, a.arm_label, ref_side=ref_side,
                                       test_side=side)
             for w in warn:
                 log_to(ctx, "compare: " + w)
-            for line in compare.summary_lines(doc, doc["gate_arm"]):
+            for line in compare.summary_lines(doc, doc["gate_arm"], ref_side, side):
                 log_to(ctx, line)
+            tokens = results.report_tokens(doc, ref_side, arm_side=side)
     else:
         doc = results.build(side, title=a.title, thresholds=a.thresholds, notes=a.note)
-    _write(ctx, doc, out)
+        tokens = results.report_tokens(doc, side)
+    _write(ctx, doc, out, tokens)
     for p in results.validate_shape(doc):
         log_to(ctx, f"note: launch80 will not accept this file yet: {p}")
     if interrupted:
@@ -246,15 +251,21 @@ RESUMABLE = ("humaneval", "mbpp", "lcb")  # a rerun asks only for the missing it
 
 
 def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
-    """Keep how many of a task's replies hit the token cap (state.json), and say so in the log."""
+    """Keep how many of a task's replies hit the token cap and their output tokens (state.json); log both."""
     if task not in SCORED or not st["replies"]:
         return
     caps = ctx.state.setdefault("caps", {})
     old = caps.get(task) if task in RESUMABLE else None
+    # "thinking" in caps is the run's --thinking; caps kept before thinking counts have none for their tokens
+    st = {("thinking_tokens" if k == "thinking" else k): v for k, v in st.items()}
     if old:
-        st = {k: st[k] + old.get(k, 0) for k in st}
+        old = {"thinking_tokens": [None] * len(old.get("tokens", [])), **old}
+        st = {k: old.get(k, type(v)()) + v for k, v in st.items()}  # caps from 0.4.0 and earlier have no tokens
     caps[task] = {**st, "thinking": ctx.thinking or "", "max_tokens": ctx.think_min_tokens if ctx.thinking == "on" else 0}
     ctx.save_state()
+    if tk := stats.tokens_summary(st["tokens"]):
+        log_to(ctx, f"{task}: {tk['n']} {'reply' if tk['n'] == 1 else 'replies'}, {tk['mean']:,} output tokens per "
+                    f"reply (mean), {tk['median']:,} (median)")
     if st["length"]:
         log_to(ctx, f"{task}: {st['length']} of {st['replies']} replies stopped at the token cap (scored as wrong)")
     if ctx.thinking is None and st["reasoning"]:
@@ -266,10 +277,10 @@ def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
                     "--thinking off was set; the server may not honour enable_thinking")
 
 
-def _write(ctx: Ctx, doc: dict, out: Path) -> None:
+def _write(ctx: Ctx, doc: dict, out: Path, tokens: dict | None = None) -> None:
     for w in results.write(doc, out):
         log_to(ctx, "results: " + w)
-    html = report.write(doc, out)
+    html = report.write(doc, out, tokens=tokens)
     log_to(ctx, f"wrote {out} and {html.name}")
 
 

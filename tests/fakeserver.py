@@ -10,12 +10,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class Fake:
     def __init__(self, noise: float = 0.0, reasoning: bool = False, inline: bool = False, finish: str = "stop",
-                 mrcr_truncate: bool = False):
+                  mrcr_truncate: bool = False, usage=None):
         self.noise = noise          # shifts logprobs, so a "quantized" server differs from the reference
         self.reasoning = reasoning
         self.inline = inline        # reasoning inside content as <think>…</think> (no reasoning parser)
         self.finish = finish        # finish_reason of chat replies ("length": cut at max_tokens)
         self.mrcr_truncate = mrcr_truncate  # answer MRCR asks with half the piece, like a degraded model
+        self.usage = usage          # replaces the usage of chat replies (e.g. "n/a": a server that sends junk)
         self.requests = []
         self.aborted = threading.Event()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -80,8 +81,12 @@ class Fake:
                         usage["completion_tokens"] = len(content) // 4 + (7 if fake.reasoning else 0)
                         if fake.reasoning:
                             usage["completion_tokens_details"] = {"reasoning_tokens": 7}
+                    else:
+                        usage["completion_tokens"] = len(toks)
+                        if fake.reasoning:  # as vLLM with a reasoning parser: the reasoning's share of completion_tokens
+                            usage["completion_tokens_details"] = {"reasoning_tokens": len(msg["reasoning_content"].split())}
                     return self._json({"choices": [{"message": msg, "finish_reason": fake.finish, "logprobs": {"content": lp}}],
-                                       "usage": usage})
+                                       "usage": usage if fake.usage is None else fake.usage})
                 if self.path.endswith("/completions"):
                     ids = body["prompt"]
                     pl = [None]

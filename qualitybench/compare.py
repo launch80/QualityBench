@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
+import sys
 from pathlib import Path
 
 from . import envs, items, kld, stats
 from .context import sidecar_for
 from .proxy import describe
-from .results import file_hash, parse_thresholds
-from .suite import SCORED
+from .results import TOKENS_NOTE, file_hash, notes_at, parse_thresholds, side_tokens
+from .suite import BY_ID, SCORED
 
 DEFAULT_GATES = {"task_delta_pts": -2.0, "top1_pct": 93.0, "ppl_delta_pct": 3.0, "kld_mean": 0.05}
 
@@ -118,6 +120,34 @@ def arm_block(ref_side: Path, test_side: Path, test_doc: dict, label: str | None
     return out, warn
 
 
+def arm_tokens(ref_side: Path, test_side: Path, tasks: dict) -> tuple[dict, list[str]]:
+    """Output tokens per reply as (reference, test) summaries, for the compared tasks both runs counted them in."""
+    r, t = side_tokens(ref_side), side_tokens(test_side)
+    warn = []
+    for name, has, other in (("reference", r, t), ("test", t, r)):
+        if miss := [k for k in tasks if k in other and k not in has]:
+            warn.append(f"output tokens not compared for {', '.join(miss)}: the {name} run has no counts for "
+                        f"{'it' if len(miss) == 1 else 'them'} (made with QualityBench 0.4.0 or earlier, the server "
+                        "sent no usage, or not every reply was counted)")
+    return {k: (r[k], t[k]) for k in tasks if k in r and k in t}, warn
+
+
+def _pct(ref: int, test: int) -> str:
+    """Change in whole percent, halves away from zero (as the report's table rounds)."""
+    if not ref:
+        return "n/a"
+    p = 100 * (test - ref) / ref
+    return f"{'+' if p >= 0 else '-'}{math.floor(abs(p) + 0.5)}%"
+
+
+def refuse_comparison(path: Path, doc: dict) -> None:
+    """Exit 2 for a comparison given as the reference: its sidecar is never the reference run's data (absent, or the
+    test run's), so deltas and token counts would be scored against the wrong run."""
+    if doc.get("arms") or doc.get("think_dirs"):
+        print(f"compare: {path} is a comparison; pass the reference run's own results file", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def params_warning(ref_side: Path, test_side: Path) -> list[str]:
     """The task deltas mean little when the runs sent different --request-param (e.g. reasoning_effort)."""
     def params(side):
@@ -165,22 +195,20 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
     test = json.loads(Path(test_json).read_text())
     rs, ts = ref_side or sidecar_for(Path(ref_json)), test_side or sidecar_for(Path(test_json))
     warn = []
+    refuse_comparison(ref_json, ref)
     for name, s in (("reference", rs), ("test", ts)):
-        if not s.is_dir():
+        if not (s / "ENV.json").is_file():  # a comparison's own sidecar holds only the report's tokens.json
             raise SystemExit(f"compare: the {name} run's per-item data ({s}) is missing; it is written next to the "
                              "results file by `qualitybench run` and must be kept with it")
     arm, w = arm_block(rs, ts, test, label, [])
-    warn += w
+    tok, tw = arm_tokens(rs, ts, arm.get("tasks", {}))
+    warn += w + tw
     warn += params_warning(rs, ts)
     doc = copy.deepcopy(ref)
     key = key or arm_key(test["model"])
     if key == "ref":
         key = "test"
-    arms = dict(doc.get("arms") or {})
-    arms[key] = arm
-    while len(arms) > 3:  # the page draws at most three arms
-        arms.pop(next(iter(arms)))
-    doc["arms"] = arms
+    doc["arms"] = {key: arm}
     doc["gate_arm"] = key
     tpath = thresholds or str(default_thresholds())
     rows = parse_thresholds(tpath)
@@ -188,22 +216,29 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
     doc["gates"] = gates
     v = verdicts(arm, gates, ref.get("tasks", []), code_ppl_gate(rows, gates))
     for r in rows:
-        prev = next((x for x in doc.get("thresholds") or [] if x["id"] == r["id"]), {})
-        res = {k: x for k, x in (prev.get("results") or {}).items() if k in arms}
         if r["id"] in v:
-            res[key] = v[r["id"]]
-        if res:
-            r["results"] = res
+            r["results"] = {key: v[r["id"]]}
     doc["thresholds"] = rows
     doc.setdefault("hashes", {})["THRESHOLDS.md"] = file_hash(tpath)
-    doc["title"] = f"{ref['model']} vs {test['model']}"[:160] if not ref.get("arms") else doc["title"]
+    doc["title"] = f"{ref['model']} vs {test['model']}"[:160]
     doc["arms_note"] = (f"Arm {key}: {test['model']} scored against the reference {ref['model']} on the same items and "
                         "the same token windows.")[:600]
+    if tok:
+        note = (f"{arm['label']} vs reference, output tokens per reply (mean, median): "
+                + " · ".join(f"{BY_ID[t].label} {r['mean']:,}→{s['mean']:,} ({_pct(r['mean'], s['mean'])}, "
+                             f"{_pct(r['median'], s['median'])})" for t, (r, s) in tok.items()))[:600]
+        cav = doc.get("caveats") or []
+        # after the reference's own tokens caveat, else before the --note caveats
+        at = next((i + 1 for i, c in enumerate(cav) if c.startswith(TOKENS_NOTE)), None) or notes_at(cav)
+        doc["caveats"] = (cav[:at] + [note] + cav[at:])[:12]
     return doc, warn
 
 
-def summary_lines(doc: dict, key: str) -> list[str]:
+def summary_lines(doc: dict, key: str, ref_side: Path, test_side: Path) -> list[str]:
     arm = doc["arms"][key]
+    tok, _ = arm_tokens(ref_side, test_side, arm.get("tasks") or {})
+    per = lambda what, r, s: (f"    {what}/reply: mean {r['mean']:,} -> {s['mean']:,} ({_pct(r['mean'], s['mean'])}), "
+                              f"median {r['median']:,} -> {s['median']:,} ({_pct(r['median'], s['median'])})")
     out = [f"arm {key}: {arm['label']}"]
     if "kld" in arm:
         out.append(f"  KLD mean {arm['kld']['mean']:.4f} nats, top-1 agreement {arm['top1']['agree']:.2f} %")
@@ -211,6 +246,11 @@ def summary_lines(doc: dict, key: str) -> list[str]:
         out.append(f"  perplexity {s}: {p['ref']:.4f} -> {p['arm']:.4f} ({p['delta_pct']:+.2f} %)")
     for t, q in (arm.get("tasks") or {}).items():
         out.append(f"  {t}: {q['delta']:+.2f} pts (95% CI {q['ci'][0]:+.2f} to {q['ci'][1]:+.2f}, McNemar p {q['p']:.3g})")
+        if t in tok:
+            r, s = tok[t]
+            out.append(per("tokens", r, s))
+            if "thinking" in r and "thinking" in s:
+                out.append(per("thinking", r["thinking"], s["thinking"]))
     if "mrcr" in arm:
         m = arm["mrcr"]
         out.append(f"  mrcr: mean match {m['ref']:.2f} -> {m['arm']:.2f} ({m['delta']:+.2f} pts, 95% CI {m['ci'][0]:+.2f} to "

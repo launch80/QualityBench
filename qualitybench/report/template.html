@@ -118,6 +118,14 @@ footer{color:var(--muted);font-size:12.5px;margin-top:22px}
     <details id="about-tasks-d"><summary>What the benchmarks measure</summary><div id="about-tasks"></div></details>
   </section>
 
+  <section id="s-tokens">
+    <h2>How much the model writes</h2>
+    <p class="lede">Everything the model generated, not counting the prompts. Fewer tokens means faster and cheaper
+      answers. <span id="tokens-how"></span></p>
+    <div id="t-tokens"></div>
+    <p class="lede" id="tokens-note" style="margin-top:10px;font-size:13px"></p>
+  </section>
+
   <section id="s-think">
     <h2>Thinking on vs off, paired</h2>
     <p class="lede">Each item is answered both ways, so the comparison is paired: the dot is the accuracy change, the line its

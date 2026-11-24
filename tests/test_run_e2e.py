@@ -102,8 +102,17 @@ def test_compare_and_schema(home, tmp_path, capsys):
             (tmp_path / f"{name}.qb" / "items").mkdir(exist_ok=True)
             items = [{"id": f"gsm8k/{i}", "correct": (i % 3 != 0) ^ (flip and i == 1)} for i in range(30)]
             (tmp_path / f"{name}.qb" / "items" / "gsm8k.jsonl").write_text("\n".join(map(json.dumps, items)) + "\n")
+        for name, toks in (("ref", [1000, 1500, 2000] * 10), ("test", [600, 1200, 1200] * 10)):  # one per item
+            st = tmp_path / f"{name}.qb" / "state.json"
+            caps = {"gsm8k": {"replies": 30, "length": 0, "reasoning": 0, "tokens": toks}}
+            st.write_text(json.dumps({**json.loads(st.read_text()), "caps": caps}))
+        capsys.readouterr()
         assert main(["compare", str(tmp_path / "ref.json"), str(tmp_path / "test.json"), "--out", str(tmp_path / "cmp.json")]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        i = next(i for i, l in enumerate(lines) if l.startswith("  gsm8k: "))
+        assert lines[i + 1] == "    tokens/reply: mean 1,500 -> 1,000 (-33%), median 1,500 -> 1,200 (-20%)"
         cmp_doc = json.loads((tmp_path / "cmp.json").read_text())
+        assert "fake vs reference, output tokens per reply (mean, median): GSM8K 1,500→1,000 (-33%, -20%)" in cmp_doc["caveats"]
         arm = cmp_doc["arms"]["fake"]
         assert arm["kld"]["mean"] > 0 and 0 <= arm["top1"]["agree"] <= 100
         assert arm["spec_parity"]["identical"] is True
@@ -123,13 +132,142 @@ def test_compare_and_schema(home, tmp_path, capsys):
         test.close()
 
 
-def test_reference_flag_writes_comparison_to_out(home, tmp_path):
+def _scored_run(tmp_path, name, caps, notes=(), ifeval=30):
+    """A finished run's results file and sidecar, written by hand: gsm8k and ifeval items, state.json caps."""
+    from qualitybench import items, results
+    side = tmp_path / f"{name}.qb"
+    (side / "items").mkdir(parents=True)
+    (side / "ENV.json").write_text(json.dumps({"model": name, "thinking": "off", "date": "2026-11-12"}))
+    (side / "state.json").write_text(json.dumps({"caps": caps}))
+    for t, n in (("gsm8k", 30), ("ifeval", ifeval)):
+        items.write(side / "items" / f"{t}.jsonl", [{"id": f"{t}/{i}", "correct": i % 3 != 0} for i in range(n)])
+    results.write(results.build(side, notes=list(notes)), tmp_path / f"{name}.json")
+    return tmp_path / f"{name}.json"
+
+
+def test_compare_tokens_caveat_survives_a_full_reference(home, tmp_path, capsys):
+    caps = lambda n: {t: {"replies": 30, "length": 0, "reasoning": 0, "tokens": [n] * 30} for t in ("gsm8k", "ifeval")}
+    # a reference results file with 12 caveats and no tokens caveat of its own (written before its counts were kept)
+    ref = _scored_run(tmp_path, "ref", {}, notes=[f"n{i}" for i in range(12)])
+    (tmp_path / "ref.qb" / "state.json").write_text(json.dumps({"caps": caps(800)}))
+    assert len(json.loads(ref.read_text())["caveats"]) == 12
+    test = _scored_run(tmp_path, "test", caps(1000), ifeval=20)  # ifeval: other items, not compared
+    assert main(["compare", str(ref), str(test), "--arm-label", "Q4 build", "--out", str(tmp_path / "cmp.json")]) == 0
+    o = capsys.readouterr()
+    assert "ifeval not compared" in o.err and "output tokens not compared" not in o.err
+    assert [l for l in o.out.splitlines() if "tokens/reply" in l] == [
+        "    tokens/reply: mean 800 -> 1,000 (+25%), median 800 -> 1,000 (+25%)"]
+    doc = publishable(json.loads((tmp_path / "cmp.json").read_text()))
+    assert len(doc["caveats"]) == 12
+    # before the --note caveats, which give way at 12; IFEval has counts on both sides but was not compared
+    assert doc["caveats"][0] == "Q4 build vs reference, output tokens per reply (mean, median): GSM8K 800→1,000 (+25%, +25%)"
+    assert doc["caveats"][1] == "Note: n0" and "Note: n11" not in doc["caveats"]
+
+
+def test_compare_thinking_tokens_when_both_runs_counted_them(home, tmp_path, capsys):
+    cap = lambda toks, th=None: {"replies": 30, "length": 0, "reasoning": 30, "tokens": toks * 10,
+                                 **({"thinking_tokens": th * 10} if th else {})}
+    # gsm8k: both runs have thinking counts; ifeval: only the reference's server sent them
+    ref = _scored_run(tmp_path, "ref", {"gsm8k": cap([1000, 1500, 2000], [700, 800, 1200]),
+                                        "ifeval": cap([1000, 1500, 2000], [700, 800, 1200])})
+    test = _scored_run(tmp_path, "test", {"gsm8k": cap([600, 1200, 1200], [400, 450, 650]),
+                                          "ifeval": cap([600, 1200, 1200])})
+    assert main(["compare", str(ref), str(test), "--out", str(tmp_path / "cmp.json")]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    i = next(i for i, l in enumerate(lines) if l.startswith("  gsm8k: "))
+    assert lines[i + 1:i + 3] == ["    tokens/reply: mean 1,500 -> 1,000 (-33%), median 1,500 -> 1,200 (-20%)",
+                                  "    thinking/reply: mean 900 -> 500 (-44%), median 800 -> 450 (-44%)"]
+    i = next(i for i, l in enumerate(lines) if l.startswith("  ifeval: "))
+    assert lines[i + 1] == "    tokens/reply: mean 1,500 -> 1,000 (-33%), median 1,500 -> 1,200 (-20%)"
+    assert sum("thinking/reply" in l for l in lines) == 1
+    doc = publishable(json.loads((tmp_path / "cmp.json").read_text()))
+    assert ("test vs reference, output tokens per reply (mean, median): GSM8K 1,500→1,000 (-33%, -20%) · "
+            "IFEval 1,500→1,000 (-33%, -20%)") in doc["caveats"]  # totals only
+    assert ("Output tokens per reply as the server counted them, mean (median): GSM8K 1,500 (1,500), thinking 900 (800) · "
+            "IFEval 1,500 (1,500), thinking 900 (800)") in doc["caveats"]  # the reference's own
+    # the HTML table's data, next to the comparison: the reference's counts and the arm's
+    s = lambda m, md, th=None: {"n": 30, "mean": m, "median": md, **({"thinking": th} if th else {})}
+    want = {"ref": {"gsm8k": s(1500, 1500, {"mean": 900, "median": 800}), "ifeval": s(1500, 1500, {"mean": 900, "median": 800})},
+            "arms": {"test": {"gsm8k": s(1000, 1200, {"mean": 500, "median": 450}), "ifeval": s(1000, 1200)}}}
+    assert json.loads((tmp_path / "cmp.qb" / "tokens.json").read_text()) == want
+    assert f"const T = {json.dumps(want, separators=(',', ':'))};" in (tmp_path / "cmp.html").read_text()
+    # cmp.json as the reference is refused as a comparison; as the test run, its cmp.qb/ (only that tokens.json)
+    # is not a run's per-item data
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        main(["compare", str(tmp_path / "cmp.json"), str(test), "--out", str(tmp_path / "again.json")])
+    assert e.value.code == 2
+    assert f"compare: {tmp_path / 'cmp.json'} is a comparison; pass the reference run's own results file" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match="per-item data"):
+        main(["compare", str(ref), str(tmp_path / "cmp.json"), "--out", str(tmp_path / "again.json")])
+    # a run's results file whose sidecar has no ENV.json (not a run's data) is not compared either
+    (tmp_path / "bare.json").write_text(ref.read_text())
+    (tmp_path / "bare.qb").mkdir()
+    (tmp_path / "bare.qb" / "tokens.json").write_text("{}")
+    with pytest.raises(SystemExit, match="per-item data"):
+        main(["compare", str(tmp_path / "bare.json"), str(test), "--out", str(tmp_path / "again.json")])
+
+
+def test_compare_says_once_when_one_run_has_no_token_counts(home, tmp_path, capsys):
+    counted = {"replies": 30, "length": 0, "reasoning": 0, "tokens": [100, 200, 600] * 10}
+    old = {"replies": 30, "length": 0, "reasoning": 0}  # caps as QualityBench 0.4.0 kept them
+    ref = _scored_run(tmp_path, "ref", {"gsm8k": counted, "ifeval": counted})
+    test = _scored_run(tmp_path, "test", {"gsm8k": old, "ifeval": old})
+    assert main(["compare", str(ref), str(test), "--out", str(tmp_path / "cmp.json")]) == 0
+    o = capsys.readouterr()
+    assert o.err.count("output tokens not compared") == 1  # once, not per task
+    assert ("warning: output tokens not compared for gsm8k, ifeval: the test run has no counts for them (made with "
+            "QualityBench 0.4.0 or earlier, the server sent no usage, or not every reply was counted)") in o.err
+    assert "  gsm8k: " in o.out and "  ifeval: " in o.out and "tokens/reply" not in o.out
+    doc = publishable(json.loads((tmp_path / "cmp.json").read_text()))
+    assert not any("vs reference, output tokens" in c for c in doc["caveats"])
+    # neither run counted: no tokens.json, so no cmp.qb/ beside the comparison
+    old_ref = _scored_run(tmp_path, "oldref", {"gsm8k": old, "ifeval": old})
+    assert main(["compare", str(old_ref), str(test), "--out", str(tmp_path / "old.json")]) == 0
+    assert (tmp_path / "old.html").is_file() and not (tmp_path / "old.qb").exists()
+
+
+def test_compare_skips_tasks_whose_replies_were_not_all_counted(home, tmp_path, capsys):
+    full = lambda toks: {"replies": 30, "length": 0, "reasoning": 0, "tokens": toks * 10}
+    ref = _scored_run(tmp_path, "ref", {"gsm8k": full([100, 200, 600]), "ifeval": full([100, 200, 600])})
+    # ifeval: 29 counts for 30 items (a killed run's first attempt was never recorded), so none are published
+    test = _scored_run(tmp_path, "test", {"gsm8k": full([50, 100, 300]), "ifeval": {**full([50, 100, 300]),
+                                                                                    "tokens": [50, 100, 300] * 9 + [50, 100]}})
+    assert main(["compare", str(ref), str(test), "--out", str(tmp_path / "cmp.json")]) == 0
+    o = capsys.readouterr()
+    assert o.err.count("output tokens not compared") == 1
+    assert ("warning: output tokens not compared for ifeval: the test run has no counts for it (made with QualityBench "
+            "0.4.0 or earlier, the server sent no usage, or not every reply was counted)") in o.err
+    assert [l for l in o.out.splitlines() if "tokens/reply" in l] == [
+        "    tokens/reply: mean 300 -> 150 (-50%), median 200 -> 100 (-50%)"]
+    doc = publishable(json.loads((tmp_path / "cmp.json").read_text()))
+    assert "test vs reference, output tokens per reply (mean, median): GSM8K 300→150 (-50%, -50%)" in doc["caveats"]
+    own = json.loads(test.read_text())["caveats"]
+    assert "Output tokens per reply as the server counted them, mean (median): GSM8K 150 (100)" in own
+
+
+def test_reference_flag_writes_comparison_to_out(home, tmp_path, capsys):
     ref, test = Fake(), Fake(noise=0.05)
     try:
+        missing = tmp_path / "missing.json"
+        assert run(ref, tmp_path / "early.json", "--reference", str(missing)) == 2  # before any work
+        assert f"qualitybench: error: reference {missing} not found" in capsys.readouterr().err
+        assert ref.requests == [] and not (tmp_path / "early.qb").exists()
         assert run(ref, tmp_path / "ref.json") == 0
         assert run(test, tmp_path / "test.json", "--reference", str(tmp_path / "ref.json"), "--arm", "int4") == 0
         doc = json.loads((tmp_path / "test.json").read_text())
         assert "int4" in doc["arms"] and (tmp_path / "test.qb" / "run.json").is_file()
+        # a comparison as the reference: its sidecar is the test run's, so every delta would be against the wrong run
+        refused = "compare: {} is a comparison; pass the reference run's own results file"
+        n = len(test.requests)
+        with pytest.raises(SystemExit) as e:
+            run(test, tmp_path / "third.json", "--reference", str(tmp_path / "test.json"))
+        assert e.value.code == 2 and refused.format(tmp_path / "test.json") in capsys.readouterr().err
+        assert len(test.requests) == n and not (tmp_path / "third.qb").exists()  # refused before any work
+        with pytest.raises(SystemExit) as e:
+            main(["compare", str(tmp_path / "test.json"), str(tmp_path / "ref.json"), "--out", str(tmp_path / "c.json")])
+        assert e.value.code == 2 and refused.format(tmp_path / "test.json") in capsys.readouterr().err
+        assert not (tmp_path / "c.json").exists()
     finally:
         ref.close()
         test.close()
@@ -188,11 +326,97 @@ def test_proxy_counts_capped_and_reasoning_replies(home):
             for _ in range(3):
                 c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
             c.post("/v1/completions", {"model": "fake", "prompt": [1, 2, 3], "max_tokens": 1})  # not a chat
-            assert px.take_stats() == {"replies": 3, "length": 3, "reasoning": 3}
-            assert px.take_stats() == {"replies": 0, "length": 0, "reasoning": 0}
+            # the fake counts a reply's words as its output tokens: "answer to: hi" is 3, its reasoning "thinking..." 1
+            assert px.take_stats() == {"replies": 3, "length": 3, "reasoning": 3, "tokens": [3, 3, 3], "thinking": [1, 1, 1]}
+            assert px.take_stats() == {"replies": 0, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
             fake.finish, fake.reasoning = "stop", False
-            c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
-            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0}
+            c.chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)  # no completion_tokens_details
+            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [3], "thinking": [None]}
+            # thinking tokens as radiance sends them; junk ones count as unknown, never shift the two lists apart
+            for det in (b'{"reasoning_tokens":36}', b'{"reasoning_tokens":true}', b'{"reasoning_tokens":-1}',
+                        b'{"reasoning_tokens":2.0}', b'"n/a"'):
+                px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],'
+                         b'"usage":{"completion_tokens":41,"completion_tokens_details":' + det + b'}}')
+            px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],'
+                     b'"usage":{"completion_tokens_details":{"reasoning_tokens":36}}}')  # no total: neither is kept
+            assert px.take_stats() == {"replies": 6, "length": 0, "reasoning": 0, "tokens": [41] * 5,
+                                       "thinking": [36, None, None, None, None]}
+            # streamed: usage arrives last, in a chunk with no choices; a reply without (valid) usage still counts
+            px.tally(b'data: {"choices":[{"delta":{"content":"a b"},"finish_reason":null}]}\n\n'
+                     b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":null}\n\n'
+                     b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\ndata: [DONE]\n\n')
+            px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}]}')
+            px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],"usage":{"completion_tokens":-1}}')
+            assert px.take_stats() == {"replies": 3, "length": 0, "reasoning": 0, "tokens": [2], "thinking": [None]}
+            for junk in (b'"n/a"', b'{"completion_tokens":true}', b'{"completion_tokens":2.0}'):
+                px.tally(b'{"choices":[{"message":{"content":"x"},"finish_reason":"stop"}],"usage":' + junk + b'}')
+            assert px.take_stats() == {"replies": 3, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+            # junk usage from the server must not spoil the reply the client already got
+            fake.usage = "n/a"
+            r = qhttp.Client(px.url, attempts=1).chat("fake", [{"role": "user", "content": "hi"}], max_tokens=8)
+            assert r["choices"][0]["message"]["content"] == "answer to: hi" and r["usage"] == "n/a"
+            assert px.take_stats() == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [], "thinking": []}
+    finally:
+        fake.close()
+
+
+def test_run_reports_output_tokens_per_task(home, tmp_path, monkeypatch):
+    from qualitybench import items
+    from qualitybench.tasks import harness
+
+    def lmeval(prompts):  # stands in for lm-eval: chat requests through the proxy, then the per-item results
+        def go(ctx, task):
+            c = qhttp.Client(ctx.api)
+            for p in prompts[task]:
+                c.chat("fake", [{"role": "user", "content": p}], max_tokens=8)
+            items.write(ctx.items_path(task), [{"id": f"{task}/{i}", "correct": i != 1}
+                                               for i in range(len(prompts[task]))])  # one reply per item
+        return go
+
+    fake = Fake()
+    try:
+        # the fake counts a reply's words as its output tokens: "answer to: x x x" is 5
+        monkeypatch.setattr(harness, "run_lmeval", lmeval({"gsm8k": ["x", "x x x", "x x x x x x x x x x"],
+                                                           "ifeval": ["x x x"]}))
+        assert run(fake, tmp_path / "ref.json", "--tasks", "gsm8k,ifeval") == 0
+        doc = publishable(json.loads((tmp_path / "ref.json").read_text()))
+        own = "Output tokens per reply as the server counted them, mean (median): GSM8K 7 (5) · IFEval 5 (5)"
+        assert own in doc["caveats"]
+        log = (tmp_path / "ref.qb" / "run.log").read_text()
+        assert "gsm8k: 3 replies, 7 output tokens per reply (mean), 5 (median)" in log
+        assert "ifeval: 1 reply, 5 output tokens per reply (mean), 5 (median)" in log
+        # a test run with --reference: the comparison says how the replies' lengths changed
+        monkeypatch.setattr(harness, "run_lmeval", lmeval({"gsm8k": ["x", "x", "x x x"], "ifeval": ["x"]}))
+        assert run(fake, tmp_path / "test.json", "--tasks", "gsm8k,ifeval", "--reference", str(tmp_path / "ref.json")) == 0
+        cmp = publishable(json.loads((tmp_path / "test.json").read_text()))
+        note = "fake vs reference, output tokens per reply (mean, median): GSM8K 7→4 (-43%, -40%) · IFEval 5→3 (-40%, -40%)"
+        assert note in cmp["caveats"]
+        assert cmp["caveats"].index(note) == cmp["caveats"].index(own) + 1  # right after the reference's own
+        lines = [l.split("] ", 1)[1] for l in (tmp_path / "test.qb" / "run.log").read_text().splitlines() if "] " in l]
+        i = next(i for i, l in enumerate(lines) if l.startswith("  gsm8k: ") and "pts" in l)
+        assert lines[i + 1] == "    tokens/reply: mean 7 -> 4 (-43%), median 5 -> 3 (-40%)"
+        assert not any("thinking/reply" in l for l in lines)  # this server sends no thinking counts
+        # the HTML table's data stays out of the results file: next to each, for `qualitybench report` too
+        embedded = lambda p: json.loads(p.read_text().split("const T = ", 1)[1].split(";\n", 1)[0])
+        ref_tk = {"gsm8k": {"n": 3, "mean": 7, "median": 5}, "ifeval": {"n": 1, "mean": 5, "median": 5}}
+        assert json.loads((tmp_path / "ref.qb" / "tokens.json").read_text()) == {"ref": ref_tk}
+        assert embedded(tmp_path / "ref.html") == {"ref": ref_tk}
+        arm = {"ref": ref_tk, "arms": {"fake": {"gsm8k": {"n": 3, "mean": 4, "median": 3}, "ifeval": {"n": 1, "mean": 3, "median": 3}}}}
+        assert json.loads((tmp_path / "test.qb" / "tokens.json").read_text()) == arm
+        assert embedded(tmp_path / "test.html") == arm
+        # thinking on against the thinking-off reference, same items: paired, and the server counts the reasoning
+        fake.reasoning = True
+        monkeypatch.setattr(harness, "run_lmeval", lmeval({"gsm8k": ["x", "x", "x x x"], "ifeval": ["x"]}))
+        assert run(fake, tmp_path / "on.json", "--tasks", "gsm8k,ifeval", "--thinking", "on",
+                   "--reference", str(tmp_path / "ref.json")) == 0
+        pair = publishable(json.loads((tmp_path / "on.json").read_text()))
+        assert all("paired" in t for t in pair["tasks"])
+        assert ("Output tokens per reply as the server counted them, mean (median): GSM8K off 7 (5), on 4 (3), "
+                "thinking 1 (1) · IFEval off 5 (5), on 3 (3), thinking 1 (1)") in pair["caveats"]
+        on_tk = {"gsm8k": {"n": 3, "mean": 4, "median": 3, "thinking": {"mean": 1, "median": 1}},
+                 "ifeval": {"n": 1, "mean": 3, "median": 3, "thinking": {"mean": 1, "median": 1}}}
+        assert json.loads((tmp_path / "on.qb" / "tokens.json").read_text()) == {"ref": ref_tk, "on": on_tk}
+        assert embedded(tmp_path / "on.html") == {"ref": ref_tk, "on": on_tk}
     finally:
         fake.close()
 
