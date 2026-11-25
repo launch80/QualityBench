@@ -79,22 +79,7 @@ def items_ok(ctx: Ctx, task: str) -> bool:
 
 
 def run_task(ctx: Ctx, task: str, client: qhttp.Client) -> None:
-    if task in ("gsm8k", "ifeval", "mmlu_pro"):
-        harness.run_lmeval(ctx, task)
-    elif task in ("humaneval", "mbpp"):
-        harness.run_evalplus(ctx, task)
-    elif task == "bfcl":
-        harness.run_bfcl(ctx)
-    elif task == "lcb":
-        harness.run_lcb(ctx)
-    elif task == "logprobs":
-        native.run_logprobs(ctx, client)
-    elif task == "needle":
-        native.run_needle(ctx, client)
-    elif task == "mrcr":
-        native.run_mrcr(ctx, client)
-    elif task == "spec_parity":
-        native.run_parity(ctx, client)
+    BY_ID[task].run(ctx, client)
     if task in SCORED:
         it = items.load(ctx.items_path(task))
         emit(task, state="scored", correct=sum(it.values()), total=len(it))

@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from .context import Ctx
+    from .http import Client
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -15,6 +20,9 @@ class Task:
     # Full-run minutes on the reference run (estimate.REF_RUN, thinking off). L80 keeps a copy
     # (internal/qualitybench/suite.go RefMinutes) for when this tool can't be asked.
     ref_minutes: float
+    # Runs the task against the endpoint, writing its items or sidecar file. Each module imports its engine
+    # inside run: the engines import qualitybench.suite, and a call-time lookup lets tests patch them.
+    run: Callable[[Ctx, Client], None]
     default: bool = True
     # Rough cost rank, cheapest first: with --deadline, cheap tasks run first.
     cost: int = 0

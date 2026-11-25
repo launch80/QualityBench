@@ -1,5 +1,11 @@
 from ..taskdef import Task
 
+
+def run(ctx, client):
+    from ..tasks import harness
+    harness.run_evalplus(ctx, "humaneval")
+
+
 TASK = Task(
     id="humaneval", label="HumanEval+", items=164, order=40, cost=22,
     how="evalplus base + plus tests, sandboxed",
@@ -9,4 +15,5 @@ TASK = Task(
     prefetch='if want & {"humaneval", "mbpp"}:\n'
              '    from evalplus.data import get_human_eval_plus, get_mbpp_plus\n'
              '    print("humaneval+", len(get_human_eval_plus()), "mbpp+", len(get_mbpp_plus()))\n',
+    run=run,
 )

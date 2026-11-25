@@ -1,5 +1,11 @@
 from ..taskdef import Task
 
+
+def run(ctx, client):
+    from ..tasks import native
+    native.run_mrcr(ctx, client)
+
+
 # Opt-in until L80's suite.go carries it: 200 conversations of 33k-128k tokens, prefill-heavy, so it runs last.
 TASK = Task(
     id="mrcr", label="MRCR 8-needle", items=200, order=110, default=False, cost=60,
@@ -9,4 +15,5 @@ TASK = Task(
     # Not part of the reference run: 14.3M prompt tokens at its 1280 tok/s prefill is about 3h05, plus the
     # replies. A guess until a run of this model is in the history.
     ref_minutes=200,
+    run=run,
 )

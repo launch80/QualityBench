@@ -76,6 +76,41 @@ def test_task_modules_carry_the_old_tables(tmp_path):
         assert runner.finished(ctx, t.id)
 
 
+def test_run_task_runs_the_tasks_own_run(monkeypatch, tmp_path):
+    import dataclasses
+    from types import SimpleNamespace
+    from qualitybench import runner
+    assert all(callable(t.run) for t in suite.SUITE)
+    ctx, client, got, emitted = SimpleNamespace(items_path=lambda t: tmp_path / f"{t}.items.jsonl"), object(), [], []
+
+    def fake(c, cl):
+        got.append((c, cl))
+        (tmp_path / "gsm8k.items.jsonl").write_text('{"id": "a", "correct": 1}\n{"id": "b", "correct": 0}\n')
+    monkeypatch.setitem(suite.BY_ID, "gsm8k", dataclasses.replace(suite.BY_ID["gsm8k"], run=fake))
+    monkeypatch.setattr(runner, "emit", lambda task, **f: emitted.append((task, f)))
+    runner.run_task(ctx, "gsm8k", client)
+    assert got == [(ctx, client)] and emitted == [("gsm8k", {"state": "scored", "correct": 1, "total": 2})]
+
+
+def test_each_task_runs_its_engine(monkeypatch):
+    from qualitybench.tasks import native
+    calls = []
+    for mod, names in ((harness, ("run_lmeval", "run_evalplus", "run_bfcl", "run_lcb")),
+                       (native, ("run_logprobs", "run_needle", "run_mrcr", "run_parity"))):
+        for n in names:
+            monkeypatch.setattr(mod, n, lambda ctx, *a, n=n: calls.append((ctx, n, a)))
+    ctx, client = object(), object()
+    want = {"gsm8k": ("run_lmeval", ("gsm8k",)), "ifeval": ("run_lmeval", ("ifeval",)),
+            "mmlu_pro": ("run_lmeval", ("mmlu_pro",)), "humaneval": ("run_evalplus", ("humaneval",)),
+            "mbpp": ("run_evalplus", ("mbpp",)), "bfcl": ("run_bfcl", ()), "lcb": ("run_lcb", ()),
+            "logprobs": ("run_logprobs", (client,)), "needle": ("run_needle", (client,)),
+            "mrcr": ("run_mrcr", (client,)), "spec_parity": ("run_parity", (client,))}
+    for t, (fn, args) in want.items():
+        calls.clear()
+        suite.BY_ID[t].run(ctx, client)
+        assert calls == [(ctx, fn, args)], t
+
+
 def test_suite_rejects_clashing_tasks():
     from qualitybench.taskdef import Task
     a, b = suite.BY_ID["gsm8k"], suite.BY_ID["ifeval"]
