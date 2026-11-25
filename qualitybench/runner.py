@@ -21,16 +21,12 @@ from .suite import BY_ID, SCORED, parse_tasks, run_order
 from .tasks import harness, native
 
 
-#: Tasks whose fixed inputs must be built from a readable tokenizer before any of them can run.
-INPUT_TASKS = {"logprobs": "evalset", "needle": "needle"}
-
-
 def precheck_inputs(ctx: Ctx, todo: list[str]) -> list[str]:
     """Build the tokenizing tasks' fixed inputs up front; one that cannot be built (e.g. no readable tokenizer)
     is skipped with its reason instead of failing hours into the run."""
     keep = []
     for t in todo:
-        what = INPUT_TASKS.get(t)
+        what = BY_ID[t].inputs
         if not what:
             keep.append(t)
             continue
@@ -69,15 +65,12 @@ def preflight(ctx: Ctx, client: qhttp.Client) -> None:
                          "(vLLM --reasoning-parser) and a chat template that honours enable_thinking")
 
 
-OUTPUTS = {"logprobs": "logprobs.npz", "needle": "needle.json", "spec_parity": "parity.json", "mrcr": "mrcr.json"}
-
-
 def finished(ctx: Ctx, task: str) -> bool:
     if task in ctx.state["partials"]:
         return False
     if task in SCORED:
         return items_ok(ctx, task)
-    return (ctx.side / OUTPUTS[task]).is_file()
+    return (ctx.side / BY_ID[task].output).is_file()
 
 
 def items_ok(ctx: Ctx, task: str) -> bool:
@@ -271,15 +264,12 @@ def run(a) -> int:
     return 1 if failed else 0
 
 
-RESUMABLE = ("gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
-
-
 def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
     """Keep how many of a task's replies hit the token cap and their output tokens (state.json); log both."""
     if task not in SCORED or not st["replies"]:
         return
     caps = ctx.state.setdefault("caps", {})
-    old = caps.get(task) if task in RESUMABLE else None
+    old = caps.get(task) if BY_ID[task].resumable else None
     # "thinking" in caps is the run's --thinking; caps kept before thinking counts have none for their tokens
     st = {("thinking_tokens" if k == "thinking" else k): v for k, v in st.items()}
     if old:

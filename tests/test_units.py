@@ -29,6 +29,110 @@ def test_parse_tasks():
         suite.parse_tasks("gsm8k,nope")
 
 
+# Each task's metadata lives in its own module: these are the values the old per-concern tables held.
+TASK_FIELDS = {  # id: (scored, resumable, output, ref_minutes, overhead_s, floor_s, prefill, lmeval_pick, inputs)
+    "gsm8k": (True, True, None, 19, 15, 0, False, ("flexible-extract", "exact_match"), None),
+    "ifeval": (True, True, None, 9, 18, 0, False, ("none", "prompt_level_strict_acc"), None),
+    "mmlu_pro": (True, True, None, 42, 25, 0, False, ("custom-extract", "exact_match"), None),
+    "humaneval": (True, True, None, 22, 25, 0, False, None, None),
+    "mbpp": (True, True, None, 32, 30, 0, False, None, None),
+    "bfcl": (True, False, None, 4, 5, 0, False, None, None),
+    "lcb": (True, True, None, 17, 35, 0, False, None, None),
+    "logprobs": (False, False, "logprobs.npz", 16, 10, 1.5, True, None, "evalset"),
+    "needle": (False, False, "needle.json", 6, 10, 0, True, None, "needle"),
+    "spec_parity": (False, False, "parity.json", 2, 5, 0, False, None, None),
+    "mrcr": (False, False, "mrcr.json", 200, 15, 0, True, None, None),
+}
+
+PREFETCH_SCRIPT = r"""
+import sys
+want = set(sys.argv[1].split(","))
+from datasets import load_dataset
+if "gsm8k" in want: print("gsm8k", len(load_dataset("openai/gsm8k", "main", split="test")))
+if "ifeval" in want: print("ifeval", len(load_dataset("google/IFEval", split="train")))
+if "mmlu_pro" in want: print("mmlu_pro", len(load_dataset("TIGER-Lab/MMLU-Pro", split="test")))
+if want & {"humaneval", "mbpp"}:
+    from evalplus.data import get_human_eval_plus, get_mbpp_plus
+    print("humaneval+", len(get_human_eval_plus()), "mbpp+", len(get_mbpp_plus()))
+"""
+
+
+def test_task_modules_carry_the_old_tables(tmp_path):
+    from types import SimpleNamespace
+    from qualitybench import runner
+    # a new task is one more module: pin these eleven and their relative order, not the whole set
+    assert [t.id for t in suite.SUITE if t.id in TASK_FIELDS] == list(TASK_FIELDS)
+    assert len({t.order for t in suite.SUITE}) == len(suite.SUITE) == len(suite.BY_ID)
+    assert suite.SUITE == sorted(suite.SUITE, key=lambda t: t.order)
+    assert [i for i in suite.SCORED if i in TASK_FIELDS] == ["gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "bfcl", "lcb"]
+    got = {i: (t.scored, t.resumable, t.output, t.ref_minutes, t.overhead_s, t.floor_s, t.prefill, t.lmeval_pick, t.inputs)
+           for i in TASK_FIELDS for t in [suite.BY_ID[i]]}
+    assert got == TASK_FIELDS
+    # a non-scored task is finished once its sidecar file is there
+    ctx = SimpleNamespace(state={"partials": {}}, side=tmp_path, items_path=lambda t: tmp_path / f"{t}.items.jsonl")
+    for t in suite.SUITE:
+        assert not runner.finished(ctx, t.id)
+        (tmp_path / (t.output or f"{t.id}.items.jsonl")).write_text("x")
+        assert runner.finished(ctx, t.id)
+
+
+def test_suite_rejects_clashing_tasks():
+    from qualitybench.taskdef import Task
+    a, b = suite.BY_ID["gsm8k"], suite.BY_ID["ifeval"]
+    assert suite.build({"gsm8k": a, "ifeval": b}) == [a, b]
+    with pytest.raises(ValueError, match="gsm8k.*copy.*id 'gsm8k'"):
+        suite.build({"gsm8k": a, "ifeval": b, "copy": Task(**{**vars(a), "order": 999})})
+    with pytest.raises(ValueError, match="ifeval.*other.*order 20"):
+        suite.build({"gsm8k": a, "ifeval": b, "other": Task(**{**vars(b), "id": "other"})})
+
+
+def test_setup_needs_follow_the_tasks(monkeypatch, tmp_path):
+    from qualitybench import envs, estimate as e
+    monkeypatch.setenv("QUALITYBENCH_HOME", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(envs, "ensure_venv", lambda n: calls.append(("venv", n)))
+    monkeypatch.setattr(envs, "ensure_mrcr_inputs", lambda: calls.append(("mrcr",)))
+    monkeypatch.setattr(envs, "ensure_evalplus_image", lambda: calls.append(("evalplus",)))
+    monkeypatch.setattr(envs, "ensure_lcb", lambda sb: calls.append(("lcb", sb)))
+    monkeypatch.setattr(envs, "lcb_docker_base", lambda net, mounts: ["docker"])
+
+    def run(cmd, **kw):
+        cmd = list(map(str, cmd))
+        if envs.LCB_PREFETCH in cmd:
+            calls.append(("lcb_prefetch",))
+        else:
+            assert cmd[2] == PREFETCH_SCRIPT
+            calls.append(("prefetch", cmd[3]))
+    monkeypatch.setattr(envs, "_run", run)
+    want = {
+        (tuple(TASK_FIELDS), "docker"): [("venv", "lmeval"), ("prefetch", "gsm8k,humaneval,ifeval,mbpp,mmlu_pro"),
+                                         ("mrcr",), ("venv", "bfcl"), ("evalplus",), ("lcb", "docker"), ("lcb_prefetch",)],
+        (("logprobs", "needle"), "docker"): [("venv", "lmeval")],
+        (("spec_parity",), "docker"): [],
+        (("mbpp",), "native"): [("venv", "lmeval"), ("prefetch", "mbpp")],
+        (("lcb",), "native"): [("lcb", "native"), ("lcb_prefetch",)],
+        (("mrcr",), "docker"): [("venv", "lmeval"), ("mrcr",)],
+        (("ifeval", "bfcl"), "docker"): [("venv", "lmeval"), ("prefetch", "ifeval"), ("venv", "bfcl")],
+    }
+    for (tasks, sb), w in want.items():
+        calls.clear()
+        envs.setup(list(tasks), sb)
+        assert calls == w, (tasks, sb)
+    # nothing installed yet: the one-time minutes each set still needs
+    monkeypatch.setattr(e, "_stamped", lambda n: False)
+    monkeypatch.setattr(e, "_image", lambda i: False)
+    minutes = {(tuple(TASK_FIELDS), "docker"): 17, (tuple(TASK_FIELDS), "native"): 14, (("gsm8k",), "docker"): 4,
+               (("logprobs", "needle"), "docker"): 4, (("bfcl",), "docker"): 2, (("humaneval",), "docker"): 6,
+               (("humaneval", "mbpp"), "native"): 4, (("lcb",), "native"): 5, (("lcb",), "docker"): 6,
+               (("mrcr",), "docker"): 7, (("spec_parity",), "docker"): 0}
+    assert {k: e.setup_minutes(list(k[0]), k[1]) for k in minutes} == minutes
+    monkeypatch.setattr(e, "_stamped", lambda n: True)
+    monkeypatch.setattr(e, "_image", lambda i: True)
+    (tmp_path / "inputs" / "mrcr").mkdir(parents=True)
+    envs.mrcr_inputs().write_text("{}")
+    assert e.setup_minutes(list(TASK_FIELDS), "docker") == 0 == e.setup_minutes(list(TASK_FIELDS), "native")
+
+
 def test_quick_subsets_are_fixed_tenths():
     assert harness.lmeval_samples("gsm8k", True) == {"gsm8k": list(range(0, 1319, 10))}
     assert harness.lmeval_samples("gsm8k", False) is None
@@ -150,19 +254,19 @@ def test_estimate_scales_with_server_speed_and_history():
     full = e.estimate(["gsm8k", "logprobs"], False, "off", "m", ref, history=[])
     assert [r["min"] for r in full["tasks"]] == [19, 16] and full["source"] == "probe"
     fast = e.estimate(["gsm8k"], False, "off", "m", {"decode_tps": e.REF_DECODE_TPS * 4, "prefill_tps": 1}, history=[])
-    ov = e.OVERHEAD_S["gsm8k"] / 60
+    ov = suite.BY_ID["gsm8k"].overhead_s / 60
     assert abs(fast["tasks"][0]["min"] - (ov + (19 - ov) / 4)) < 0.1
     think = e.estimate(["gsm8k"], False, "on", "m", ref, history=[])
     assert think["tasks"][0]["min"] > 3 * full["tasks"][0]["min"]
     # mrcr is prefill-bound: thinking on changes nothing, a 10x faster prefill cuts it tenfold
     mr = e.estimate(["mrcr"], False, "on", "m", ref, history=[])
-    assert mr["tasks"][0]["min"] == e.REF_MINUTES["mrcr"] and mr["tasks"][0]["items"] == 200
+    assert mr["tasks"][0]["min"] == suite.BY_ID["mrcr"].ref_minutes and mr["tasks"][0]["items"] == 200
     quick_fast = e.estimate(["mrcr"], True, "off", "m", {"decode_tps": 1, "prefill_tps": e.REF_PREFILL_TPS * 10}, history=[])
     assert quick_fast["tasks"][0]["items"] == 20 and quick_fast["tasks"][0]["min"] < 3
     nothing = e.estimate(["gsm8k"], True, None, "m", None, history=[])
     assert nothing["source"] == "reference" and nothing["tasks"][0]["items"] == 132
     # an earlier quick run of this model: scale its wall time to the full item count
-    o = e.OVERHEAD_S["gsm8k"]
+    o = suite.BY_ID["gsm8k"].overhead_s
     hist = [{"tasks": {"gsm8k": {"items": 132, "wall_s": o + 66}}, "probe": None}]
     h = e.estimate(["gsm8k", "ifeval"], False, "off", "m", None, history=hist)
     assert h["tasks"][0]["source"] == "history" and abs(h["tasks"][0]["min"] - (o + 66 * 1319 / 132) / 60) < 0.1

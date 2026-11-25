@@ -20,6 +20,7 @@ from importlib import resources
 from pathlib import Path
 
 from .progress import log
+from .suite import BY_ID, SUITE
 
 LCB_REPO = "https://github.com/LiveCodeBench/LiveCodeBench"
 LCB_COMMIT = "28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24"
@@ -169,17 +170,12 @@ def ensure_evalplus_image() -> None:
         _run([container(), "pull", "-q", EVALPLUS_IMAGE])
 
 
+#: Fetches the datasets of the tasks named in argv[1]: each task's own lines, lines tasks share once.
 PREFETCH = r"""
 import sys
 want = set(sys.argv[1].split(","))
 from datasets import load_dataset
-if "gsm8k" in want: print("gsm8k", len(load_dataset("openai/gsm8k", "main", split="test")))
-if "ifeval" in want: print("ifeval", len(load_dataset("google/IFEval", split="train")))
-if "mmlu_pro" in want: print("mmlu_pro", len(load_dataset("TIGER-Lab/MMLU-Pro", split="test")))
-if want & {"humaneval", "mbpp"}:
-    from evalplus.data import get_human_eval_plus, get_mbpp_plus
-    print("humaneval+", len(get_human_eval_plus()), "mbpp+", len(get_mbpp_plus()))
-"""
+""" + "".join(dict.fromkeys(t.prefetch for t in SUITE))
 
 LCB_PREFETCH = ("from lcb_runner.benchmarks.code_generation import load_code_generation_dataset;"
                 "print('lcb v6', len(load_code_generation_dataset('v6')))")
@@ -212,19 +208,19 @@ def setup(tasks: list[str], sandbox: str = "docker") -> None:
     """Install what the given tasks need and fetch their datasets."""
     (home() / "hf").mkdir(parents=True, exist_ok=True)
     (home() / "xdg").mkdir(parents=True, exist_ok=True)
-    need_lm = set(tasks) & {"gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "logprobs", "needle", "mrcr"}
-    if need_lm:
+    need = {n for t in tasks for n in BY_ID[t].needs}
+    if "lmeval" in need:
         ensure_venv("lmeval")
-        prefetch = need_lm - {"logprobs", "needle", "mrcr"}
+        prefetch = {t for t in tasks if BY_ID[t].prefetch}
         if prefetch:
             _run([venv_python("lmeval"), "-c", PREFETCH, ",".join(sorted(prefetch))], env=harness_env())
-    if "mrcr" in tasks:
+    if "mrcr_inputs" in need:
         ensure_mrcr_inputs()
-    if "bfcl" in tasks:
+    if "bfcl" in need:
         ensure_venv("bfcl")
-    if set(tasks) & {"humaneval", "mbpp"} and sandbox == "docker":
+    if "evalplus_image" in need and sandbox == "docker":
         ensure_evalplus_image()
-    if "lcb" in tasks:
+    if "lcb" in need:
         ensure_lcb(sandbox)
         if sandbox == "native":
             _run([home() / "venvs" / "lcb" / "bin" / "python", "-c", LCB_PREFETCH], cwd=home() / "lcb-src", env=harness_env())
