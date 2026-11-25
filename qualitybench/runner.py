@@ -18,20 +18,20 @@ from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidec
 from .progress import Tracker, emit, emit_line, track_run
 from .proxy import Proxy, describe, parse_params
 from .suite import BY_ID, SCORED, parse_tasks, run_order
-from .tasks import harness, native
+from .tasks import harness
 
 
 def precheck_inputs(ctx: Ctx, todo: list[str]) -> list[str]:
-    """Build the tokenizing tasks' fixed inputs up front; one that cannot be built (e.g. no readable tokenizer)
-    is skipped with its reason instead of failing hours into the run."""
+    """Run each task's prepare up front, which fetches or builds its fixed inputs; a task whose inputs cannot be
+    had (e.g. no readable tokenizer) is skipped with its reason instead of failing hours into the run."""
     keep = []
     for t in todo:
-        what = BY_ID[t].inputs
-        if not what:
+        prepare = BY_ID[t].prepare
+        if not prepare:
             keep.append(t)
             continue
         try:
-            native.ensure_inputs(ctx, what)
+            prepare(ctx)
             keep.append(t)
         except TaskFailed as e:
             ctx.mark_partial(t, f"{t}: skipped before running ({str(e)[:150]})")

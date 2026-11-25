@@ -48,8 +48,9 @@ class Task:
     prefetch: str = ""
     # lm-eval (filter, metric) that scores its samples.
     lmeval_pick: tuple[str, str] | None = None
-    # Fixed inputs built from a readable tokenizer before it can run (native.ensure_inputs).
-    inputs: str | None = None
+    # Fetches or builds the task's fixed inputs before the run starts; a TaskFailed skips the task with its
+    # reason. Imports like run.
+    prepare: Callable[[Ctx], None] | None = None
 
 
 def quick_pick(ids: list, key=None) -> list:

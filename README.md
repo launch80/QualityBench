@@ -279,7 +279,9 @@ and the study's per-item files are the regression fixtures.
    a newcomer what it measures: at most 240 ASCII characters, ending in a period (`test_every_task_is_explained`).
 3. Define `run(ctx, client)` to do the work, usually through an engine in `qualitybench/tasks/` (lm-eval, evalplus,
    BFCL, LiveCodeBench, native). Import qualitybench modules inside `run`, not at the top: they import the suite.
-   `client.chat(ctx.model, messages, max_tokens=...)` asks the server and returns its response as a dict.
+   `client.chat(ctx.model, messages, max_tokens=...)` asks the server and returns its response as a dict. A task
+   with fixed inputs to fetch or build defines `prepare(ctx)`, run before the run starts; a TaskFailed from it skips
+   the task with its reason.
 4. A task scored right/wrong per item sets `scored=True` and writes `<name>.qb/items/<id>.jsonl` with
    `items.write(ctx.items_path(TASK.id), [{"id": ..., "correct": ...}, ...])`, which alone gives it its results row,
    compare's paired statistics and the report's chart. A score that is not right/wrong (like mrcr's match ratio) also

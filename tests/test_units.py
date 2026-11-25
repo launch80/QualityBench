@@ -30,18 +30,18 @@ def test_parse_tasks():
 
 
 # Each task's metadata lives in its own module: these are the values the old per-concern tables held.
-TASK_FIELDS = {  # id: (scored, resumable, output, ref_minutes, overhead_s, floor_s, prefill, lmeval_pick, inputs)
-    "gsm8k": (True, True, None, 19, 15, 0, False, ("flexible-extract", "exact_match"), None),
-    "ifeval": (True, True, None, 9, 18, 0, False, ("none", "prompt_level_strict_acc"), None),
-    "mmlu_pro": (True, True, None, 42, 25, 0, False, ("custom-extract", "exact_match"), None),
-    "humaneval": (True, True, None, 22, 25, 0, False, None, None),
-    "mbpp": (True, True, None, 32, 30, 0, False, None, None),
-    "bfcl": (True, False, None, 4, 5, 0, False, None, None),
-    "lcb": (True, True, None, 17, 35, 0, False, None, None),
-    "logprobs": (False, False, "logprobs.npz", 16, 10, 1.5, True, None, "evalset"),
-    "needle": (False, False, "needle.json", 6, 10, 0, True, None, "needle"),
-    "spec_parity": (False, False, "parity.json", 2, 5, 0, False, None, None),
-    "mrcr": (False, False, "mrcr.json", 200, 15, 0, True, None, None),
+TASK_FIELDS = {  # id: (scored, resumable, output, ref_minutes, overhead_s, floor_s, prefill, lmeval_pick)
+    "gsm8k": (True, True, None, 19, 15, 0, False, ("flexible-extract", "exact_match")),
+    "ifeval": (True, True, None, 9, 18, 0, False, ("none", "prompt_level_strict_acc")),
+    "mmlu_pro": (True, True, None, 42, 25, 0, False, ("custom-extract", "exact_match")),
+    "humaneval": (True, True, None, 22, 25, 0, False, None),
+    "mbpp": (True, True, None, 32, 30, 0, False, None),
+    "bfcl": (True, False, None, 4, 5, 0, False, None),
+    "lcb": (True, True, None, 17, 35, 0, False, None),
+    "logprobs": (False, False, "logprobs.npz", 16, 10, 1.5, True, None),
+    "needle": (False, False, "needle.json", 6, 10, 0, True, None),
+    "spec_parity": (False, False, "parity.json", 2, 5, 0, False, None),
+    "mrcr": (False, False, "mrcr.json", 200, 15, 0, True, None),
 }
 
 PREFETCH_SCRIPT = r"""
@@ -65,7 +65,7 @@ def test_task_modules_carry_the_old_tables(tmp_path):
     assert len({t.order for t in suite.SUITE}) == len(suite.SUITE) == len(suite.BY_ID)
     assert suite.SUITE == sorted(suite.SUITE, key=lambda t: t.order)
     assert [i for i in suite.SCORED if i in TASK_FIELDS] == ["gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "bfcl", "lcb"]
-    got = {i: (t.scored, t.resumable, t.output, t.ref_minutes, t.overhead_s, t.floor_s, t.prefill, t.lmeval_pick, t.inputs)
+    got = {i: (t.scored, t.resumable, t.output, t.ref_minutes, t.overhead_s, t.floor_s, t.prefill, t.lmeval_pick)
            for i in TASK_FIELDS for t in [suite.BY_ID[i]]}
     assert got == TASK_FIELDS
     # a non-scored task is finished once its sidecar file is there
@@ -109,6 +109,22 @@ def test_each_task_runs_its_engine(monkeypatch):
         calls.clear()
         suite.BY_ID[t].run(ctx, client)
         assert calls == [(ctx, fn, args)], t
+
+
+def test_each_task_prepares_its_inputs(monkeypatch):
+    from qualitybench.tasks import native
+    calls = []
+    monkeypatch.setattr(native, "ensure_inputs", lambda ctx, what: calls.append((ctx, what)))
+    ctx = object()
+    want = {"logprobs": "evalset", "needle": "needle", "gsm8k": None, "ifeval": None, "mmlu_pro": None,
+            "humaneval": None, "mbpp": None, "bfcl": None, "lcb": None, "spec_parity": None, "mrcr": None}
+    for t, what in want.items():
+        calls.clear()
+        if what is None:
+            assert suite.BY_ID[t].prepare is None, t
+            continue
+        suite.BY_ID[t].prepare(ctx)
+        assert calls == [(ctx, what)], t
 
 
 def test_no_scored_task_names_launch80s_tasks(monkeypatch):
