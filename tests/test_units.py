@@ -111,6 +111,18 @@ def test_each_task_runs_its_engine(monkeypatch):
         assert calls == [(ctx, fn, args)], t
 
 
+def test_no_scored_task_names_launch80s_tasks(monkeypatch):
+    import dataclasses
+    from qualitybench import results
+    msg = "no scored task (launch80 needs at least one of {})"
+    assert results.validate_shape({"tasks": {}}) == [msg.format("gsm8k, ifeval, mmlu_pro, humaneval, mbpp, bfcl, lcb")]
+    assert results.validate_shape({"tasks": {}}) == [msg.format(", ".join(t.id for t in suite.SUITE if t.scored and t.default))]
+    # a scored task that is opt-in is not one launch80 carries yet
+    monkeypatch.setitem(suite.BY_ID, "toy", dataclasses.replace(suite.BY_ID["gsm8k"], id="toy", order=999, default=False))
+    monkeypatch.setattr(results, "SCORED", (*suite.SCORED, "toy"))
+    assert "toy" not in results.validate_shape({"tasks": {}})[0]
+
+
 def test_suite_rejects_clashing_tasks():
     from qualitybench.taskdef import Task
     a, b = suite.BY_ID["gsm8k"], suite.BY_ID["ifeval"]

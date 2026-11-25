@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Each task is one module (developers).** Everything about a task (its metadata, its estimate, what setup
+  installs for it and how it runs) is declared in one module in `qualitybench/suite/`. Adding a task scored
+  right/wrong per item is one new file plus its rows in the suite table in `docs/contract.md` and in the L80
+  table test. Nothing changes for users.
 - **A prompt the server's content filter refuses is scored wrong instead of killing the task.** Azure's filter
   answers a few MMLU-Pro prompts, and a few IFEval prompts it takes for jailbreaks, with HTTP 400 every time; the
   harness retried each until it gave up and took the whole task down. The proxy now answers such a refusal
