@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A prompt the server's content filter refuses is scored wrong instead of killing the task.** Azure's filter
+  answers a few MMLU-Pro prompts, and a few IFEval prompts it takes for jailbreaks, with HTTP 400 every time; the
+  harness retried each until it gave up and took the whole task down. The proxy now answers such a refusal
+  with an empty reply (`finish_reason: content_filter`), so the item counts as wrong and the task finishes.
+  The end of the task logs how many, and the results carry a caveat such as `MMLU-Pro: the server's content
+  filter refused 10 of its prompts; they count as wrong, so this score understates the model.`
+- **gsm8k, ifeval and mmlu_pro resume instead of starting over.** lm-eval now saves each reply as it arrives
+  (`lmeval/<task>-replies_rank0.db` in the sidecar), so rerunning after a failure or Ctrl-C sends only the
+  requests that have no reply yet. Before, one failed request near the end threw away every reply of the task.
+- **A run warns up front when a task cannot be built.** logprobs and needle need a readable tokenizer for their
+  fixed inputs; if none is available (e.g. the served model has no Hugging Face repo), the run now says so before
+  any server request, skips just those tasks with the reason listed in `partials`, and continues with the rest —
+  instead of hours into the run failing at each one. A missing `--eval-set` file is caught the same way.
 - **The report explains each benchmark.** Hovering a task name, a bar or a tile says in a sentence or two what the
   benchmark measures and where it comes from (GSM8K, IFEval, MMLU-Pro, HumanEval+, MBPP+, BFCL, LiveCodeBench,
   logprobs, needle, spec parity), and a "What the benchmarks measure" list under the task chart collects them.

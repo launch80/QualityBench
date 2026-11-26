@@ -44,9 +44,14 @@ def run_lmeval(ctx: Ctx, task: str) -> None:
     total = sum(map(len, samples.values())) if samples else BY_ID[task].items
     margs = (f"model={ctx.model},base_url={ctx.api}/v1/chat/completions,num_concurrent={ctx.concurrency},"
              f"max_retries=3,tokenized_requests=False,timeout=3600")
+    # lm-eval saves each reply here as it arrives (sqlite, <cache>_rank0.db), so a rerun after a failure or Ctrl-C
+    # sends only the requests that have no reply yet. Replies tallied before the cache existed are not in it.
+    cache = ctx.path("lmeval", f"{task}-replies")
+    if not lmeval_cache_db(cache).is_file() and ctx.state.get("caps", {}).pop(task, None) is not None:
+        ctx.save_state()
     cmd = [envs.venv_bin("lmeval", "lm-eval"), "run", "--model", "local-chat-completions", "--model_args", margs,
            "--apply_chat_template", "--num_fewshot", "0", "--log_samples", "--output_path", out,
-           "--gen_kwargs", "temperature=0,max_gen_toks=2048", "--tasks", tasks]
+           "--gen_kwargs", "temperature=0,max_gen_toks=2048", "--tasks", tasks, "--use_cache", cache]
     if samples:
         cmd += ["--samples", json.dumps(samples)]
     emit(task, done=0, total=total)
@@ -58,6 +63,10 @@ def run_lmeval(ctx: Ctx, task: str) -> None:
     k, n = items.write(ctx.items_path(task), recs)
     stock = f" (lm-eval's stock scoring: {sum(r['stock'] for r in recs)}/{n})" if task == "gsm8k" else ""
     log_to(ctx, f"{task}: {k}/{n} correct{stock}")
+
+
+def lmeval_cache_db(cache: Path) -> Path:
+    return cache.with_name(cache.name + "_rank0.db")  # lm-eval's name for the single-process cache
 
 
 def _newest(root: Path, pattern: str) -> Path:

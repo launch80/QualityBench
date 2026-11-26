@@ -32,7 +32,10 @@ def inputs_dir(tokenizer: str) -> Path:
 def ensure_inputs(ctx: Ctx, what: str) -> Path:
     """Build eval-set.json / needle.json for this tokenizer once (in the lmeval env) and cache them."""
     if what == "evalset" and ctx.eval_set:
-        return Path(ctx.eval_set)
+        p = Path(ctx.eval_set)
+        if not p.is_file():
+            raise TaskFailed(f"--eval-set {ctx.eval_set} does not exist; create it or drop the flag")
+        return p
     tok = ctx.tokenizer or ctx.model
     d = inputs_dir(tok)
     f = d / ("eval-set.json" if what == "evalset" else "needle.json")

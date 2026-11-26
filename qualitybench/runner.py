@@ -21,6 +21,29 @@ from .suite import BY_ID, SCORED, parse_tasks, run_order
 from .tasks import harness, native
 
 
+#: Tasks whose fixed inputs must be built from a readable tokenizer before any of them can run.
+INPUT_TASKS = {"logprobs": "evalset", "needle": "needle"}
+
+
+def precheck_inputs(ctx: Ctx, todo: list[str]) -> list[str]:
+    """Build the tokenizing tasks' fixed inputs up front; one that cannot be built (e.g. no readable tokenizer)
+    is skipped with its reason instead of failing hours into the run."""
+    keep = []
+    for t in todo:
+        what = INPUT_TASKS.get(t)
+        if not what:
+            keep.append(t)
+            continue
+        try:
+            native.ensure_inputs(ctx, what)
+            keep.append(t)
+        except TaskFailed as e:
+            ctx.mark_partial(t, f"{t}: skipped before running ({str(e)[:150]})")
+            emit(t, state="partial", done=0, total=BY_ID[t].items)
+            log_to(ctx, f"WARNING: {e}")
+    return keep
+
+
 def preflight(ctx: Ctx, client: qhttp.Client) -> None:
     """The first request after start: a warmup (it pays any model load) and a check, never scored."""
     log_to(ctx, "warmup + preflight")
@@ -140,6 +163,7 @@ def run(a) -> int:
     for t in tasks:
         if t not in todo:
             log_to(ctx, f"{t}: finished earlier, skipping")
+    todo = precheck_inputs(ctx, todo)
     failed: list[str] = []
     interrupted = False
     est: dict | None = None
@@ -247,7 +271,7 @@ def run(a) -> int:
     return 1 if failed else 0
 
 
-RESUMABLE = ("humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
+RESUMABLE = ("gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
 
 
 def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
@@ -268,6 +292,8 @@ def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
                     f"reply (mean), {tk['median']:,} (median)")
     if st["length"]:
         log_to(ctx, f"{task}: {st['length']} of {st['replies']} replies stopped at the token cap (scored as wrong)")
+    if st.get("filtered"):
+        log_to(ctx, f"{task}: {st['filtered']} prompts refused by the server's content filter (scored as wrong)")
     if ctx.thinking is None and st["reasoning"]:
         log_to(ctx, f"{task}: WARNING: {st['reasoning']} of {st['replies']} replies had reasoning, but --thinking was "
                     "not set, so the harnesses' short token limits apply. Rerun with --thinking on "

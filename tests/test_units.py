@@ -282,6 +282,58 @@ def _side(tmp_path, state, thinking="server default"):
     return side
 
 
+def test_filtered_reply_stands_in_only_for_the_content_filter():
+    from qualitybench.proxy import filtered_reply
+    azure = b'{"error":{"message":"litellm.BadRequestError: Azure_aiException - {\\"code\\":\\"content_filter\\"}"}}'
+    req = json.dumps({"model": "m", "messages": [{"role": "user", "content": "q"}]}).encode()
+    data, ctype = filtered_reply(req, 400, azure)
+    d = json.loads(data)
+    assert ctype == "application/json" and d["model"] == "m"
+    assert d["choices"] == [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "content_filter"}]
+    assert d["usage"]["completion_tokens"] == 0  # a counted reply, so the task's token counts stay whole
+    assert filtered_reply(req, 400, b'{"error":{"innererror":{"code":"ResponsibleAIPolicyViolation"}}}') is not None
+    assert filtered_reply(req, 400, b'{"error":{"message":"context too long"}}') is None
+    assert filtered_reply(req, 500, azure) is None
+    data, ctype = filtered_reply(json.dumps({"model": "m", "stream": True}).encode(), 400, azure)
+    assert ctype == "text/event-stream" and data.endswith(b"\n\ndata: [DONE]\n\n")
+    assert json.loads(data.split(b"\n")[0][5:])["choices"][0]["finish_reason"] == "content_filter"
+
+
+def test_content_filtered_prompts_are_a_caveat(tmp_path):
+    from qualitybench import results
+    doc = results.build(_side(tmp_path, {"caps": {"lcb": {"replies": 20, "length": 0, "reasoning": 0, "filtered": 2}}}, "off"))
+    assert ("LiveCodeBench v6: the server's content filter refused 2 of its prompts; they count as wrong, so this "
+            "score understates the model.") in doc["caveats"]
+    assert results.validate_shape(doc) == []
+    quiet = results.build(_side(tmp_path / "q", {"caps": {"lcb": {"replies": 20, "length": 0, "reasoning": 0}}}, "off"))
+    assert not any("content filter" in c for c in quiet["caveats"])  # caps from before the count
+
+
+def test_run_lmeval_caches_replies_and_starts_caps_with_the_cache(tmp_path):
+    from qualitybench.context import Ctx, TaskFailed
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb")
+    ctx.load_state()
+    cmds = []
+
+    def failed(cmd, task, env=None, total=None):
+        cmds.append(cmd)
+        raise TaskFailed("lm-eval exited with status 1")
+
+    ctx.sh = failed
+    cache = tmp_path / "r.qb" / "lmeval" / "mmlu_pro-replies"
+    ctx.state["caps"] = {"mmlu_pro": {"replies": 990, "length": 0}}  # counted before there was a cache
+    with pytest.raises(TaskFailed):
+        harness.run_lmeval(ctx, "mmlu_pro")
+    assert cmds[0][cmds[0].index("--use_cache") + 1] == cache
+    assert "mmlu_pro" not in json.loads((tmp_path / "r.qb" / "state.json").read_text())["caps"]
+    # the cache holds the replies counted since, so a rerun's replies add up with those
+    harness.lmeval_cache_db(cache).write_bytes(b"")
+    ctx.state["caps"]["mmlu_pro"] = {"replies": 990, "length": 0}
+    with pytest.raises(TaskFailed):
+        harness.run_lmeval(ctx, "mmlu_pro")
+    assert ctx.state["caps"]["mmlu_pro"]["replies"] == 990
+
+
 def test_token_cap_caveats_and_no_logprobs_is_submittable(tmp_path):
     from qualitybench import results
     side = _side(tmp_path, {"caps": {"lcb": {"replies": 20, "length": 6, "reasoning": 20, "thinking": ""}}})
@@ -381,11 +433,11 @@ def test_record_caps_adds_up_resumed_tasks(tmp_path):
     ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb", thinking="off")
     ctx.load_state()
     was = {"replies": 2, "length": 1, "reasoning": 0, "thinking": "off", "max_tokens": 0}
-    ctx.state["caps"] = {"lcb": {**was, "tokens": [10, 20]}, "gsm8k": {**was, "tokens": [10, 20]},
+    ctx.state["caps"] = {"lcb": {**was, "tokens": [10, 20]}, "bfcl": {**was, "tokens": [10, 20]},
                          "mbpp": was,  # caps from 0.4.0: no tokens
                          "humaneval": {**was, "tokens": []}}  # a server that sent no usage
     new = lambda: {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking": [40]}
-    for t in ("lcb", "gsm8k", "mbpp", "humaneval"):
+    for t in ("lcb", "bfcl", "mbpp", "humaneval"):
         _record_caps(ctx, t, new())
     caps = json.loads((tmp_path / "r.qb" / "state.json").read_text())["caps"]
     # "thinking" in caps is the run's --thinking, so the replies' thinking tokens are kept as thinking_tokens,
@@ -393,7 +445,7 @@ def test_record_caps_adds_up_resumed_tasks(tmp_path):
     assert caps["lcb"] == {"replies": 3, "length": 1, "reasoning": 0, "tokens": [10, 20, 60],
                            "thinking_tokens": [None, None, 40], "thinking": "off",
                            "max_tokens": 0}  # a rerun asks only for the missing items
-    assert caps["gsm8k"] == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking_tokens": [40],
+    assert caps["bfcl"] == {"replies": 1, "length": 0, "reasoning": 0, "tokens": [60], "thinking_tokens": [40],
                              "thinking": "off", "max_tokens": 0}
     # kept as counted; results publish a task's counts only if every item's reply has one
     assert caps["mbpp"]["replies"] == 3 and caps["mbpp"]["tokens"] == [60] and caps["mbpp"]["thinking_tokens"] == [40]
@@ -402,7 +454,7 @@ def test_record_caps_adds_up_resumed_tasks(tmp_path):
     log = (tmp_path / "r.qb" / "run.log").read_text()
     assert [l.split("] ", 1)[1] for l in log.splitlines() if "output tokens per reply" in l] == [
         "lcb: 3 replies, 30 output tokens per reply (mean), 20 (median)",
-        "gsm8k: 1 reply, 60 output tokens per reply (mean), 60 (median)",
+        "bfcl: 1 reply, 60 output tokens per reply (mean), 60 (median)",
         "mbpp: 1 reply, 60 output tokens per reply (mean), 60 (median)",
         "humaneval: 1 reply, 60 output tokens per reply (mean), 60 (median)"]
     _record_caps(ctx, "lcb", new())  # resumed again: both lists grow together
@@ -461,6 +513,46 @@ def test_tokenizer_failure_names_the_reason(tmp_path, monkeypatch):
     script.write_text("raise SystemExit(3)\n")  # any other failure keeps the generic message, without the hint
     with pytest.raises(TaskFailed, match="exited with status 3.*for --tokenizer org/m"):
         native.ensure_inputs(Ctx(model="vllm", endpoint="x", side=tmp_path / "r.qb", tokenizer="org/m"), "evalset")
+
+
+def test_run_skips_tasks_whose_inputs_cannot_be_built(tmp_path, monkeypatch):
+    import sys
+    from qualitybench.context import Ctx
+    from qualitybench.runner import precheck_inputs
+    from qualitybench.tasks import native
+    script = tmp_path / "build_inputs.py"
+    script.write_text('raise SystemExit("tokenizer: gpt-6.1-sol is neither a local dir nor a Hugging Face repo you can read")\n')
+    monkeypatch.setenv("QUALITYBENCH_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(native.envs, "ensure_venv", lambda name: None)
+    monkeypatch.setattr(native.envs, "venv_python", lambda name: sys.executable)
+    monkeypatch.setattr(native.envs, "pkg_file", lambda *p: script)
+    ctx = Ctx(model="gpt-6.1-sol", endpoint="x", side=tmp_path / "r.qb")
+    ctx.load_state()
+    assert precheck_inputs(ctx, ["logprobs", "needle", "gsm8k"]) == ["gsm8k"]  # the non-tokenizing task is untouched
+    state = json.loads((tmp_path / "r.qb" / "state.json").read_text())["partials"]
+    for t in ("logprobs", "needle"):
+        assert "skipped before running" in state[t] and "neither a local dir" in state[t]
+
+
+def test_precheck_builds_inputs_and_keeps_runnable_tasks(tmp_path, monkeypatch):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import precheck_inputs
+    from qualitybench.tasks import native
+    what = []
+    monkeypatch.setattr(native, "ensure_inputs", lambda ctx, w: what.append(w))
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb")
+    ctx.load_state()
+    assert precheck_inputs(ctx, ["gsm8k", "needle", "logprobs"]) == ["gsm8k", "needle", "logprobs"]
+    assert what == ["needle", "evalset"]  # only the tokenizing tasks are probed
+
+
+def test_missing_eval_set_skips_logprobs(tmp_path):
+    from qualitybench.context import Ctx
+    from qualitybench.runner import precheck_inputs
+    ctx = Ctx(model="m", endpoint="x", side=tmp_path / "r.qb", eval_set=str(tmp_path / "nope.json"))
+    ctx.load_state()
+    assert precheck_inputs(ctx, ["logprobs"]) == []
+    assert "does not exist" in (tmp_path / "r.qb" / "state.json").read_text()
 
 
 def test_request_params_parse_nest_and_refuse_pinned_fields():
