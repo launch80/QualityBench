@@ -21,6 +21,7 @@ numbers side by side.
 | `mbpp` | 378 | MBPP+ base + plus tests, sandboxed (evalplus) |
 | `bfcl` | 400 | 4 categories, function calling through the server's tool parser (BFCL) |
 | `lcb` | 175 | LiveCodeBench v6, fixed slice, sandboxed |
+| `arc_agi_2` | 167 | ARC-AGI-2 public evaluation set: 120 abstract grid puzzles, 167 test grids, ARC Prize's own prompt and answer parser, one attempt per grid, exact grid match (optional; replies capped by `--thinking-max-tokens`) |
 | `logprobs` | 592 windows | teacher-forced top-64 over 2048-token windows: perplexity, and KLD / top-1 agreement in compare |
 | `needle` | 20 | a 7-digit needle at 10 depths in 32k and 128k of C4 text |
 | `mrcr` | 200 | MRCR 8-needle (openai/mrcr): eight identical asks hidden in a 64k or 128k conversation, scored as the mean SequenceMatcher ratio of the reply to the asked-for text, 100 conversations per length (optional; the long-context probe that still separates models, where `needle` is at 100%) |
@@ -182,6 +183,11 @@ lm-eval replies and logprob chunks are kept and skipped.
   a reply may use `--thinking-max-tokens` when the server's context has room for it after the prompt, else the
   room left (at least 2048), so a 128k server still runs the 64k half whole and most of the 128k half; replies
   that hit their cap are counted and reported. A 256k server runs all 200 conversations at any setting.
+- **arc_agi_2** is opt-in: name it in `--tasks`. The first run downloads the evaluation set (about 415 KB, arcprize/ARC-AGI-2
+  at a pinned commit) once. Every reply may use `--thinking-max-tokens`, with thinking on or off, and a
+  reasoning model spends tens of thousands of thinking tokens per grid at high effort, so a full run is long.
+  To compare with a frontier model, run the same task against its API: ARC Prize's leaderboard numbers come
+  from another set (semi-private), two attempts and per-task scoring, so they are not directly comparable.
 - **logprobs is optional for publishing.** On a server without `prompt_logprobs` (llama.cpp, radiance), run
   `--tasks gsm8k,ifeval,mmlu_pro,humaneval,mbpp,bfcl,lcb,needle`. The results carry task scores only, and the page
   shows perplexity and KLD as n/a.

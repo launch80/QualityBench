@@ -13,11 +13,11 @@ from qualitybench.tasks.native import parity_compare
 
 
 def test_suite_matches_l80_table():
-    # L80's internal/qualitybench/suite.go holds the same ids, item counts and default flags. mrcr is opt-in
-    # until the release that adds it there (docs/contract.md).
+    # L80's internal/qualitybench/suite.go holds the same ids, item counts and default flags. mrcr and arc_agi_2 are
+    # opt-in until the release that adds them there (docs/contract.md).
     want = [("gsm8k", 1319, True), ("ifeval", 541, True), ("mmlu_pro", 1000, True), ("humaneval", 164, True),
-            ("mbpp", 378, True), ("bfcl", 400, True), ("lcb", 175, True), ("logprobs", 592, True),
-            ("needle", 20, True), ("spec_parity", 32, False), ("mrcr", 200, False)]
+            ("mbpp", 378, True), ("bfcl", 400, True), ("lcb", 175, True), ("arc_agi_2", 167, False),
+            ("logprobs", 592, True), ("needle", 20, True), ("spec_parity", 32, False), ("mrcr", 200, False)]
     assert [(t.id, t.items, t.default) for t in suite.SUITE] == want
     assert suite.run_order(["mrcr", "gsm8k", "bfcl"], deadline=True) == ["bfcl", "gsm8k", "mrcr"]  # the dearest task last
 

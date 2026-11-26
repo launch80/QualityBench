@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **New opt-in task `arc_agi_2` (ARC-AGI-2).** The 120 public evaluation tasks of ARC-AGI-2 (167 test grids):
+  abstract visual puzzles where the model infers a rule from a few example grid pairs and must produce the
+  output grid exactly; name it in `--tasks` to run it. The first run downloads the set once (about 415 KB,
+  arcprize/ARC-AGI-2 at a pinned commit); if it cannot, the run skips the task before the first request and
+  says why. ARC Prize's own prompt and answer parser (arc-agi-benchmarking), one attempt per test grid, exact
+  match, thinking ignored, no grid is wrong. Every reply may use `--thinking-max-tokens` (default 32768),
+  with thinking on or off, so runs are long. Scores are per grid with one attempt, so they are not directly
+  comparable with ARC Prize's leaderboard (semi-private set, two attempts, averaged per task): to compare
+  with a frontier model, run the same task against it. Reruns ask only for the grids not answered yet.
 - **Each task is one module (developers).** Everything about a task (its metadata, its estimate, what setup
   installs for it and how it runs) is declared in one module in `qualitybench/suite/`. Adding a task scored
   right/wrong per item is one new file plus its rows in the suite table in `docs/contract.md` and in the L80
