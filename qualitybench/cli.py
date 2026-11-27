@@ -37,8 +37,6 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--request-param", action="append", default=[], metavar="KEY=VALUE",
                    help="add a field to every chat request, e.g. reasoning_effort=high or chat_template_kwargs.x=1 "
                         "(dotted keys nest; values parse as JSON when they can). Sampling and token limits stay pinned")
-    r.add_argument("--reference", help="results file of a reference run: also compare against it (KLD, paired "
-                                       "deltas, thresholds); --out then holds the comparison")
     r.add_argument("--thresholds", help="thresholds markdown table (default: the built-in bars)")
     r.add_argument("--deadline", help="RFC 3339 time or a duration such as 6h: start no work after it, mark cut tasks partial")
     r.add_argument("--note", action="append", default=[], metavar="KEY=VALUE",
@@ -51,8 +49,6 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--tokenizer", help="HF repo or local dir of the model's tokenizer, for logprobs and needle "
                                        "(default: the model id)")
     r.add_argument("--eval-set", help="a prebuilt eval-set.json to score instead of building one for the tokenizer")
-    r.add_argument("--arm", help="key of this run in the comparison (default: from the model name)")
-    r.add_argument("--arm-label", help="label of this run in the comparison (default: the model id)")
     r.add_argument("--yes", "-y", action="store_true", help="start without asking about the estimated time")
     r.add_argument("--max-minutes", type=float, help="do not start (exit 3) if the run could take longer than this")
     r.add_argument("--no-probe", action="store_true", help="skip the short server speed test; estimate from history "
@@ -77,7 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--thresholds", help="thresholds markdown table (default: the built-in bars)")
     c.add_argument("--out", help="where to write the comparison (default: <test>-vs-<ref>.json)")
     c.add_argument("--arm", help="key of the test run in the comparison (default: from its model name)")
-    c.add_argument("--arm-label", help="label of the test run (default: its model id)")
+    c.add_argument("--arm-label", help="label of the test run (default: its model id, plus \", thinking on\" (or off) "
+                                       "when the two runs' thinking differs)")
 
     rp = sub.add_parser("report", help="render the HTML report for a results file")
     rp.add_argument("results")
@@ -143,7 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         from .context import sidecar_for
         doc = json.loads(Path(a.results).read_text())
         side = sidecar_for(Path(a.results))
-        # a run's own counts only for its own page: a comparison's or thinking pair's sidecar is not the reference's
+        # a run's own counts only for its own page: a comparison's or an old thinking pair's sidecar is not the
+        # reference's
         tokens = (json.loads((side / "tokens.json").read_text()) if (side / "tokens.json").is_file() else
                   {"ref": results.side_tokens(side)} if (side / "state.json").is_file() and not doc.get("arms")
                   and not doc.get("think_dirs") else None)
@@ -175,9 +173,6 @@ def main(argv: list[str] | None = None) -> int:
             parse_deadline(a.deadline)
         except ValueError as e:
             print(f"qualitybench: error: {e}", file=sys.stderr)
-            return 2
-        if a.reference and not Path(a.reference).is_file():
-            print(f"qualitybench: error: reference {a.reference} not found", file=sys.stderr)
             return 2
         if a.concurrency < 1:
             print("qualitybench: error: --concurrency must be at least 1", file=sys.stderr)

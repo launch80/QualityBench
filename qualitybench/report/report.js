@@ -44,6 +44,8 @@ const ARMC = ["var(--s1)", "var(--s2)", "var(--s3)"];
 const LP = D.logprobs || {};
 const SETS = [["ppl-wiki", "var(--s1)"], ["ppl-code", "var(--s2)"], ["kld", "var(--s3)"]].filter(([k]) => LP[k]);
 const THINK = D.tasks.some(t => t.on);
+// a run's own scores sit in `off`; thinking on is in env (a comparison's env is its reference's)
+const ON_RUN = !THINK && (D.env || {}).thinking_on_min_max_tokens > 0;
 
 // ---------- header + tiles
 function header() {
@@ -55,7 +57,7 @@ function header() {
     e.bfcl_eval && `BFCL ${e.bfcl_eval}`, D.generated && `generated ${D.generated}`].filter(Boolean);
   $("#chips").innerHTML = chips.map((c, i) => `<span class="chip ${i ? "" : "proto"}">${esc(c)}</span>`).join("");
   const nd = D.needle ? D.needle.items : [];
-  const tiles = [[`${D.tasks.length}`, "tasks scored", THINK ? "thinking off and on" : "thinking off is the reference"]];
+  const tiles = [[`${D.tasks.length}`, "tasks scored", THINK ? "thinking off and on" : !ON_RUN ? "" : ARMS.length ? "reference: thinking on" : "with thinking on"]];
   if (D.tasks.length) {
     const best = D.tasks.reduce((a, t) => a + t.off.acc, 0) / D.tasks.length;
     const onTasks = D.tasks.filter(t => t.on);
@@ -80,6 +82,8 @@ function header() {
 function tasksChart() {
   if (!D.tasks.length) { hide("#s-tasks"); return; }
   const rows = THINK ? [["off", "var(--s1)", 4], ["on", "var(--s2)", 22]] : [["off", "var(--s1)", 8]];
+  $("#tasks-think").textContent = THINK ? " Thinking off is the gated reference; thinking on is exploratory."
+    : !ON_RUN ? "" : ARMS.length ? " The reference had thinking on." : " This run had thinking on.";
   if (!THINK) $("#s-tasks .legend").style.display = "none";
   const w = W("#c-tasks"), L = Math.min(150, w * .3), R = 56, rowH = THINK ? 46 : 32, top = 6, h = top + D.tasks.length * rowH + 24;
   const svg = svgIn($("#c-tasks"), w, h), sx = v => L + (w - L - R) * v / 100;

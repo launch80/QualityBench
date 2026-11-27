@@ -41,13 +41,12 @@ def test_tasks_match_published_numbers_exactly():
 
 
 def test_task_rows_from_a_sidecar(tmp_path):
-    side, on = tmp_path / "ref.qb", tmp_path / "think.qb"
-    for src, dst in ((FIX / "bf16", side), (FIX / "bf16-think", on)):
-        (dst / "items").mkdir(parents=True)
-        for f in src.glob("*.jsonl"):
-            shutil.copy(f, dst / "items" / f.name)
-    rows = {r["id"]: r for r in results.task_rows(side, on, "bf16-think")}
-    want = {t["id"]: t for t in json.loads((FIX / "study-report-tasks.json").read_text())["tasks"]}
-    # The study's report described gsm8k as "last number"; the description changed in 0.3.0, the numbers did not.
-    assert {k: v for k, v in rows["gsm8k"].items() if k != "how"} == {k: v for k, v in want["gsm8k"].items() if k != "how"}
-    assert rows["mmlu_pro"]["off"] == want["mmlu_pro"]["off"] and "on" not in rows["mmlu_pro"]  # its thinking-on run is bf16-think2
+    side = tmp_path / "ref.qb"
+    (side / "items").mkdir(parents=True)
+    for f in (FIX / "bf16").glob("*.jsonl"):
+        shutil.copy(f, side / "items" / f.name)
+    rows = results.task_rows(side)
+    want = json.loads((FIX / "study-report-tasks.json").read_text())["tasks"]
+    # A run's own scores sit in `off`; the study's thinking-on scores came from its thinking-on runs, not this one.
+    assert [r["id"] for r in rows] == [t["id"] for t in want]
+    assert [r["off"] for r in rows] == [t["off"] for t in want] and not any("on" in r or "paired" in r for r in rows)

@@ -132,12 +132,12 @@ def test_compare_and_schema(home, tmp_path, capsys):
         test.close()
 
 
-def _scored_run(tmp_path, name, caps, notes=(), ifeval=30):
+def _scored_run(tmp_path, name, caps, notes=(), ifeval=30, thinking="off"):
     """A finished run's results file and sidecar, written by hand: gsm8k and ifeval items, state.json caps."""
     from qualitybench import items, results
     side = tmp_path / f"{name}.qb"
     (side / "items").mkdir(parents=True)
-    (side / "ENV.json").write_text(json.dumps({"model": name, "thinking": "off", "date": "2026-11-12"}))
+    (side / "ENV.json").write_text(json.dumps({"model": name, "thinking": thinking, "date": "2026-11-12"}))
     (side / "state.json").write_text(json.dumps({"caps": caps}))
     for t, n in (("gsm8k", 30), ("ifeval", ifeval)):
         items.write(side / "items" / f"{t}.jsonl", [{"id": f"{t}/{i}", "correct": i % 3 != 0} for i in range(n)])
@@ -208,6 +208,40 @@ def test_compare_thinking_tokens_when_both_runs_counted_them(home, tmp_path, cap
         main(["compare", str(tmp_path / "bare.json"), str(test), "--out", str(tmp_path / "again.json")])
 
 
+def test_compare_names_each_runs_thinking_when_they_differ(home, tmp_path):
+    # a run left at the server's default against one with thinking on
+    ref = _scored_run(tmp_path, "ref", {}, thinking="server default")
+    test = _scored_run(tmp_path, "test", {}, thinking="on")
+    assert main(["compare", str(ref), str(test), "--out", str(tmp_path / "cmp.json")]) == 0
+    doc = json.loads((tmp_path / "cmp.json").read_text())
+    assert doc["title"] == "ref, default thinking vs test, thinking on"
+    assert doc["arms"]["test"]["label"] == "test, thinking on"
+    assert doc["arms_note"].startswith("Arm test: test, thinking on scored against the reference ref, default thinking ")
+    # a long model id gives way in the label, the thinking setting does not
+    long = "org/" + "m" * 66
+    _scored_run(tmp_path, "long", {}, thinking="on")
+    lj = tmp_path / "long.json"
+    lj.write_text(json.dumps({**json.loads(lj.read_text()), "model": long}))
+    off = _scored_run(tmp_path, "off", {})
+    assert main(["compare", str(off), str(lj), "--out", str(tmp_path / "l.json")]) == 0
+    label = json.loads((tmp_path / "l.json").read_text())["arms"]["m" * 32]["label"]
+    assert len(long) == 70 and len(label) == 60 and label == long[:47] + ", thinking on"
+
+
+def test_compare_refuses_an_old_thinking_pair_as_reference(home, tmp_path, capsys):
+    # a document `run --reference` wrote for thinking off vs on before 0.5: its sidecar is the thinking-on run's
+    test = _scored_run(tmp_path, "test", {})
+    old = tmp_path / "pair.json"
+    old.write_text(json.dumps({**json.loads(test.read_text()), "think_dirs": ["on"]}))
+    import shutil
+    shutil.copytree(tmp_path / "test.qb", tmp_path / "pair.qb")  # a run's data, but not the reference's
+    with pytest.raises(SystemExit) as e:
+        main(["compare", str(old), str(test), "--out", str(tmp_path / "c.json")])
+    assert e.value.code == 2
+    assert f"compare: {old} is a comparison; pass the reference run's own results file" in capsys.readouterr().err
+    assert not (tmp_path / "c.json").exists()
+
+
 def test_compare_says_once_when_one_run_has_no_token_counts(home, tmp_path, capsys):
     counted = {"replies": 30, "length": 0, "reasoning": 0, "tokens": [100, 200, 600] * 10}
     old = {"replies": 30, "length": 0, "reasoning": 0}  # caps as QualityBench 0.4.0 kept them
@@ -246,31 +280,17 @@ def test_compare_skips_tasks_whose_replies_were_not_all_counted(home, tmp_path, 
     assert "Output tokens per reply as the server counted them, mean (median): GSM8K 150 (100)" in own
 
 
-def test_reference_flag_writes_comparison_to_out(home, tmp_path, capsys):
-    ref, test = Fake(), Fake(noise=0.05)
+def test_run_has_no_reference_or_arm_flags(home, tmp_path, capsys):
+    # comparing is `qualitybench compare`; run only writes its own results
+    fake = Fake()
     try:
-        missing = tmp_path / "missing.json"
-        assert run(ref, tmp_path / "early.json", "--reference", str(missing)) == 2  # before any work
-        assert f"qualitybench: error: reference {missing} not found" in capsys.readouterr().err
-        assert ref.requests == [] and not (tmp_path / "early.qb").exists()
-        assert run(ref, tmp_path / "ref.json") == 0
-        assert run(test, tmp_path / "test.json", "--reference", str(tmp_path / "ref.json"), "--arm", "int4") == 0
-        doc = json.loads((tmp_path / "test.json").read_text())
-        assert "int4" in doc["arms"] and (tmp_path / "test.qb" / "run.json").is_file()
-        # a comparison as the reference: its sidecar is the test run's, so every delta would be against the wrong run
-        refused = "compare: {} is a comparison; pass the reference run's own results file"
-        n = len(test.requests)
-        with pytest.raises(SystemExit) as e:
-            run(test, tmp_path / "third.json", "--reference", str(tmp_path / "test.json"))
-        assert e.value.code == 2 and refused.format(tmp_path / "test.json") in capsys.readouterr().err
-        assert len(test.requests) == n and not (tmp_path / "third.qb").exists()  # refused before any work
-        with pytest.raises(SystemExit) as e:
-            main(["compare", str(tmp_path / "test.json"), str(tmp_path / "ref.json"), "--out", str(tmp_path / "c.json")])
-        assert e.value.code == 2 and refused.format(tmp_path / "test.json") in capsys.readouterr().err
-        assert not (tmp_path / "c.json").exists()
+        for flag in ("--reference", "--arm", "--arm-label"):
+            with pytest.raises(SystemExit) as e:
+                run(fake, tmp_path / "r.json", flag, "x")
+            assert e.value.code == 2 and "unrecognized arguments" in capsys.readouterr().err
+        assert fake.requests == [] and not (tmp_path / "r.qb").exists()
     finally:
-        ref.close()
-        test.close()
+        fake.close()
 
 
 def test_deadline_marks_tasks_partial(home, tmp_path):
@@ -360,7 +380,7 @@ def test_proxy_counts_capped_and_reasoning_replies(home):
         fake.close()
 
 
-def test_run_reports_output_tokens_per_task(home, tmp_path, monkeypatch):
+def test_run_reports_output_tokens_per_task(home, tmp_path, monkeypatch, capsys):
     from qualitybench import items
     from qualitybench.tasks import harness
 
@@ -378,21 +398,25 @@ def test_run_reports_output_tokens_per_task(home, tmp_path, monkeypatch):
         # the fake counts a reply's words as its output tokens: "answer to: x x x" is 5
         monkeypatch.setattr(harness, "run_lmeval", lmeval({"gsm8k": ["x", "x x x", "x x x x x x x x x x"],
                                                            "ifeval": ["x x x"]}))
-        assert run(fake, tmp_path / "ref.json", "--tasks", "gsm8k,ifeval") == 0
+        assert run(fake, tmp_path / "ref.json", "--tasks", "gsm8k,ifeval", "--thinking", "off") == 0
         doc = publishable(json.loads((tmp_path / "ref.json").read_text()))
         own = "Output tokens per reply as the server counted them, mean (median): GSM8K 7 (5) · IFEval 5 (5)"
         assert own in doc["caveats"]
         log = (tmp_path / "ref.qb" / "run.log").read_text()
         assert "gsm8k: 3 replies, 7 output tokens per reply (mean), 5 (median)" in log
         assert "ifeval: 1 reply, 5 output tokens per reply (mean), 5 (median)" in log
-        # a test run with --reference: the comparison says how the replies' lengths changed
+        # a test run, then compare: the comparison says how the replies' lengths changed
         monkeypatch.setattr(harness, "run_lmeval", lmeval({"gsm8k": ["x", "x", "x x x"], "ifeval": ["x"]}))
-        assert run(fake, tmp_path / "test.json", "--tasks", "gsm8k,ifeval", "--reference", str(tmp_path / "ref.json")) == 0
-        cmp = publishable(json.loads((tmp_path / "test.json").read_text()))
+        assert run(fake, tmp_path / "test.json", "--tasks", "gsm8k,ifeval", "--thinking", "off") == 0
+        test_tk = {"gsm8k": {"n": 3, "mean": 4, "median": 3}, "ifeval": {"n": 1, "mean": 3, "median": 3}}
+        assert json.loads((tmp_path / "test.qb" / "tokens.json").read_text()) == {"ref": test_tk}  # its own only
+        capsys.readouterr()
+        assert main(["compare", str(tmp_path / "ref.json"), str(tmp_path / "test.json"), "--out", str(tmp_path / "cmp.json")]) == 0
+        cmp = publishable(json.loads((tmp_path / "cmp.json").read_text()))
         note = "fake vs reference, output tokens per reply (mean, median): GSM8K 7→4 (-43%, -40%) · IFEval 5→3 (-40%, -40%)"
         assert note in cmp["caveats"]
         assert cmp["caveats"].index(note) == cmp["caveats"].index(own) + 1  # right after the reference's own
-        lines = [l.split("] ", 1)[1] for l in (tmp_path / "test.qb" / "run.log").read_text().splitlines() if "] " in l]
+        lines = capsys.readouterr().out.splitlines()
         i = next(i for i, l in enumerate(lines) if l.startswith("  gsm8k: ") and "pts" in l)
         assert lines[i + 1] == "    tokens/reply: mean 7 -> 4 (-43%), median 5 -> 3 (-40%)"
         assert not any("thinking/reply" in l for l in lines)  # this server sends no thinking counts
@@ -401,22 +425,41 @@ def test_run_reports_output_tokens_per_task(home, tmp_path, monkeypatch):
         ref_tk = {"gsm8k": {"n": 3, "mean": 7, "median": 5}, "ifeval": {"n": 1, "mean": 5, "median": 5}}
         assert json.loads((tmp_path / "ref.qb" / "tokens.json").read_text()) == {"ref": ref_tk}
         assert embedded(tmp_path / "ref.html") == {"ref": ref_tk}
-        arm = {"ref": ref_tk, "arms": {"fake": {"gsm8k": {"n": 3, "mean": 4, "median": 3}, "ifeval": {"n": 1, "mean": 3, "median": 3}}}}
-        assert json.loads((tmp_path / "test.qb" / "tokens.json").read_text()) == arm
-        assert embedded(tmp_path / "test.html") == arm
-        # thinking on against the thinking-off reference, same items: paired, and the server counts the reasoning
+        arm = {"ref": ref_tk, "arms": {"fake": test_tk}}
+        assert json.loads((tmp_path / "cmp.qb" / "tokens.json").read_text()) == arm
+        assert embedded(tmp_path / "cmp.html") == arm
+        # thinking on: the run writes its own results, and the server counts the reasoning
         fake.reasoning = True
         monkeypatch.setattr(harness, "run_lmeval", lmeval({"gsm8k": ["x", "x", "x x x"], "ifeval": ["x"]}))
-        assert run(fake, tmp_path / "on.json", "--tasks", "gsm8k,ifeval", "--thinking", "on",
-                   "--reference", str(tmp_path / "ref.json")) == 0
-        pair = publishable(json.loads((tmp_path / "on.json").read_text()))
-        assert all("paired" in t for t in pair["tasks"])
-        assert ("Output tokens per reply as the server counted them, mean (median): GSM8K off 7 (5), on 4 (3), "
-                "thinking 1 (1) · IFEval off 5 (5), on 3 (3), thinking 1 (1)") in pair["caveats"]
+        assert run(fake, tmp_path / "on.json", "--tasks", "gsm8k,ifeval", "--thinking", "on") == 0
+        on = publishable(json.loads((tmp_path / "on.json").read_text()))
+        assert on["model"] == "fake" and "think_dirs" not in on and "arms" not in on
+        assert not any("on" in t or "paired" in t for t in on["tasks"])
+        assert not (tmp_path / "on.qb" / "run.json").exists()
+        assert on["caveats"][0] == ("This run had thinking ON (max_tokens at least 32768): these are its scores with "
+                                    "thinking on. `qualitybench compare` against a thinking-off run shows what "
+                                    "thinking changes.")
+        assert ("Output tokens per reply as the server counted them, mean (median): GSM8K 4 (3), thinking 1 (1) · "
+                "IFEval 3 (3), thinking 1 (1)") in on["caveats"]
         on_tk = {"gsm8k": {"n": 3, "mean": 4, "median": 3, "thinking": {"mean": 1, "median": 1}},
                  "ifeval": {"n": 1, "mean": 3, "median": 3, "thinking": {"mean": 1, "median": 1}}}
-        assert json.loads((tmp_path / "on.qb" / "tokens.json").read_text()) == {"ref": ref_tk, "on": on_tk}
-        assert embedded(tmp_path / "on.html") == {"ref": ref_tk, "on": on_tk}
+        assert json.loads((tmp_path / "on.qb" / "tokens.json").read_text()) == {"ref": on_tk}
+        assert embedded(tmp_path / "on.html") == {"ref": on_tk}
+        # thinking off vs on of the same model is a compare: paired per task, the arm named by its thinking
+        capsys.readouterr()
+        assert main(["compare", str(tmp_path / "ref.json"), str(tmp_path / "on.json"), "--out", str(tmp_path / "think.json")]) == 0
+        o = capsys.readouterr()
+        th = publishable(json.loads((tmp_path / "think.json").read_text()))
+        a = th["arms"][th["gate_arm"]]
+        assert set(a["tasks"]) == {"gsm8k", "ifeval"}
+        assert all(set(q) == {"n", "delta", "ci", "ref_only", "test_only", "p"} for q in a["tasks"].values())
+        assert a["label"] == "fake, thinking on"
+        assert th["title"] == "fake, thinking off vs fake, thinking on"
+        assert th["arms_note"].startswith("Arm fake: fake, thinking on scored against the reference fake, thinking off ")
+        assert ("fake, thinking on vs reference, output tokens per reply (mean, median): GSM8K 7→4 (-43%, -40%) · "
+                "IFEval 5→3 (-40%, -40%)") in th["caveats"]
+        assert "  gsm8k: " in o.out and "different request params" not in o.err
+        assert json.loads((tmp_path / "think.qb" / "tokens.json").read_text()) == {"ref": ref_tk, "arms": {"fake": on_tk}}
     finally:
         fake.close()
 

@@ -553,34 +553,12 @@ def test_output_tokens_caveat(tmp_path):
     assert not any("Output tokens" in c for c in results.build(_side(tmp_path / "n", {"caps": none}, "off"))["caveats"])
 
 
-def test_output_tokens_caveat_pairs_thinking_off_and_on(tmp_path):
-    from qualitybench import items, results
-    counted = lambda toks: {"replies": len(toks), "length": 0, "reasoning": 0, "tokens": toks}
-    off = _side(tmp_path / "off", {"caps": {"gsm8k": counted([10]), "ifeval": {"replies": 1, "length": 0, "reasoning": 0},
-                                            "lcb": counted([300, 320] * 10)}}, "off")  # 20 lcb items, one count each
-    on = _side(tmp_path / "on", {"caps": {"gsm8k": counted([999]), "ifeval": counted([50]),
-                                          "lcb": counted([2500] * 15 + [11000] * 5)}}, "on")
-    for side, gsm in ((off, "g1"), (on, "g2")):  # gsm8k: other items on the thinking-on side, so not paired
-        items.write(side / "items" / "gsm8k.jsonl", [{"id": gsm, "correct": True}])
-        items.write(side / "items" / "ifeval.jsonl", [{"id": "i1", "correct": True}])
-    doc = results.build(off, on_side=on, on_src="on")
-    assert ("Output tokens per reply as the server counted them, mean (median): GSM8K off 10 (10) · IFEval on 50 (50) · "
-            "LiveCodeBench v6 off 310 (310), on 4,625 (2,500)") in doc["caveats"]
-
-
 def test_output_tokens_caveat_says_thinking_tokens(tmp_path):
     from qualitybench import results
     lcb = {"replies": 20, "length": 0, "reasoning": 20, "tokens": [300, 320] * 10, "thinking_tokens": [200, 220] * 10}
     one = results.build(_side(tmp_path / "one", {"caps": {"lcb": lcb}}, "on"))
     assert ("Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 310 (310), "
             "thinking 210 (210)") in one["caveats"]
-    # the thinking part follows the side it belongs to; the thinking-off run's zeros say nothing
-    off = _side(tmp_path / "off", {"caps": {"lcb": {**lcb, "thinking_tokens": [0] * 20}}}, "off")
-    on = _side(tmp_path / "on", {"caps": {"lcb": {**lcb, "tokens": [2500] * 15 + [11000] * 5,
-                                                  "thinking_tokens": [2100] * 15 + [9300] * 5}}}, "on")
-    pair = results.build(off, on_side=on, on_src="on")
-    assert ("Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 off 310 (310), "
-            "on 4,625 (2,500), thinking 3,900 (2,100)") in pair["caveats"]
     # caps kept before thinking counts were (tokens only): totals as before
     old = results.build(_side(tmp_path / "old", {"caps": {"lcb": {k: v for k, v in lcb.items() if k != "thinking_tokens"}}}, "on"))
     assert "Output tokens per reply as the server counted them, mean (median): LiveCodeBench v6 310 (310)" in old["caveats"]
@@ -761,9 +739,6 @@ def test_report_tokens_keeps_only_what_it_knows(tmp_path):
     ref, test = _side(tmp_path / "ref", counted([300, 320] * 10), "off"), _side(tmp_path / "test", counted([100] * 20), "on")
     s = lambda m: {"lcb": {"n": 20, "mean": m, "median": m}}
     assert results.report_tokens({"tasks": [{"id": "lcb"}]}, ref) == {"ref": s(310)}
-    # the thinking-on run's counts only where its scores pair with the reference's, as in the caveat
-    assert results.report_tokens({"tasks": [{"id": "lcb"}]}, ref, on_side=test) == {"ref": s(310), "on": {}}
-    assert results.report_tokens({"tasks": [{"id": "lcb", "on": {}}]}, ref, on_side=test) == {"ref": s(310), "on": s(100)}
     # the gate arm, on its compared tasks only
     doc = {"tasks": [{"id": "lcb"}], "gate_arm": "new", "arms": {"old": {"tasks": {"lcb": {}}}, "new": {"tasks": {"lcb": {}}}}}
     assert results.report_tokens(doc, ref, arm_side=test) == {"ref": s(310), "arms": {"new": s(100)}}
@@ -845,3 +820,75 @@ def test_every_task_is_explained(capsys):
     assert [r["id"] for r in rows] == [t.id for t in suite.SUITE] and all(r["about"] for r in rows)
     assert main(["tasks"]) == 0
     assert suite.BY_ID["gsm8k"].about in capsys.readouterr().out
+
+
+# The report's script run under node against a stub DOM: what the page says, not only what it contains.
+PAGE_STUB = r"""
+const els = {};
+function mk() {
+  const t = function () {};
+  Object.assign(t, { innerHTML: "", textContent: "", style: {}, children: [], clientWidth: 600 });
+  return new Proxy(t, {
+    get(o, k) { if (typeof k === "symbol") return undefined; if (k === "toString" || k === "valueOf") return () => "";
+                if (k in o) return o[k]; return (o[k] = mk()); },
+    apply() { return mk(); },
+  });
+}
+globalThis.document = { querySelector: s => els[s] || (els[s] = mk()), createElementNS: () => mk(), createElement: () => mk(),
+                        documentElement: mk(), addEventListener() {} };
+globalThis.addEventListener = () => {};
+globalThis.innerWidth = 1200; globalThis.innerHeight = 800;
+"""
+
+
+def _page(tmp_path, doc):
+    import shutil
+    import subprocess
+    from qualitybench import report
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    html = report.render(doc)
+    script = html.split("<script>\n", 1)[1].rsplit("\n</script>", 1)[0]
+    f = tmp_path / "page.js"
+    f.write_text(PAGE_STUB + script + '\nconsole.log(JSON.stringify({tiles: els["#tiles"].innerHTML, '
+                 'think: els["#tasks-think"] ? els["#tasks-think"].textContent : null}));\n')
+    out = subprocess.run(["node", str(f)], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1]), html
+
+
+def _page_doc(min_tokens, on=False, arms=False):
+    sc = {"k": 1, "n": 2, "acc": 50.0, "ci": [9.5, 90.5]}
+    task = {"id": "gsm8k", "label": "GSM8K", "how": "final answer", "off": sc}
+    doc = {"schema_version": 1, "title": "t", "model": "m", "env": {"thinking_on_min_max_tokens": min_tokens},
+           "tasks": [task], "logprobs": {}}
+    if on:  # a thinking pair as `run --reference` wrote it before 0.5
+        task.update(on={**sc, "src": "on"}, paired={"n": 2, "delta": 0.0, "ci": [0.0, 0.0], "ref_only": 0, "test_only": 0, "p": 1.0})
+        doc["think_dirs"] = ["on"]
+    if arms:
+        doc.update(arms={"q4": {"label": "q4", "tasks": {"gsm8k": task.get("paired") or
+                                                         {"n": 2, "delta": 0.0, "ci": [0.0, 0.0], "ref_only": 0, "test_only": 0, "p": 1.0}}}},
+                   gate_arm="q4")
+    return doc
+
+
+def test_page_says_thinking_off_is_the_reference_only_on_a_thinking_pair(tmp_path):
+    gated = "Thinking off is the gated reference; thinking on is exploratory."
+    on, html = _page(tmp_path, _page_doc(32768))  # a thinking-on run's own page
+    assert on["think"] == " This run had thinking on." and '<div class="n">with thinking on</div>' in on["tiles"]
+    assert "reference" not in on["tiles"] and gated not in html.split("<script>", 1)[0]
+    off, _ = _page(tmp_path, _page_doc(0))  # a thinking-off run: nothing about a reference
+    assert off["think"] == "" and '<div class="n"></div>' in off["tiles"] and "reference" not in off["tiles"]
+    pair, _ = _page(tmp_path, _page_doc(0, on=True))  # an old paired document
+    assert pair["think"] == " " + gated and '<div class="n">thinking off and on</div>' in pair["tiles"]
+    cmp, _ = _page(tmp_path, _page_doc(32768, arms=True))  # a comparison whose reference had thinking on
+    assert cmp["think"] == " The reference had thinking on." and '<div class="n">reference: thinking on</div>' in cmp["tiles"]
+    plain, _ = _page(tmp_path, _page_doc(0, arms=True))
+    assert plain["think"] == "" and "thinking off is the reference" not in plain["tiles"]
+
+
+def test_compare_arm_label_help_names_the_thinking_suffix(capsys):
+    with pytest.raises(SystemExit):
+        main(["compare", "-h"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "label of the test run (default: its model id, plus \", thinking on\" (or off) when the two runs' thinking differs)" in out

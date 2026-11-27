@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Removed: `run --reference`, and run's `--arm` and `--arm-label`.** `run` now writes only its own results
+  to `--out` (no more `<name>.qb/run.json`). To compare two runs, run both, then
+  `qualitybench compare REF.json TEST.json` (it keeps `--arm`, `--arm-label` and `--thresholds`). Thinking off
+  vs on of one model is the same: `compare off.json on.json`, which gives the paired change per task; when the
+  two runs' thinking settings differ, the arm label and title name them (`my-model, thinking on`). A
+  `--thinking on` run's caveat now says its scores are its thinking-on scores, instead of promising a pair.
+  Pages and results files made with `--reference` before still render as they did. Sending the removed flags
+  exits 2.
 - **Each task is one module (developers).** Everything about a task (its metadata, its estimate, what setup
   installs for it and how it runs) is declared in one module in `qualitybench/suite/`. Adding a task scored
   right/wrong per item is one new file plus its rows in the suite table in `docs/contract.md` and in the L80

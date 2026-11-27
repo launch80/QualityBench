@@ -68,7 +68,6 @@ Useful options:
 | `--thinking-max-tokens 32768` | with `--thinking on`, every reply may use at least this many tokens (default 32768) |
 | `--request-param reasoning_effort=high` | adds a field to every chat request, such as a reasoning effort or a chat-template option. See [Request params](#request-params) |
 | `--deadline 6h` | starts no work after the deadline; cut tasks are listed in `partials`, not dropped |
-| `--reference ref.json` | also compares this run with a reference run; `--out` then holds the comparison |
 | `--note precision=INT4 --note engine="vLLM 0.30" --note gpu="RTX PRO 6000"` | labels for the report |
 | `--tokenizer org/repo` | the model's tokenizer (Hugging Face repo or local dir) for logprobs and needle. Needed whenever `--model` is not a Hugging Face repo id |
 | `--sandbox native` | runs model code directly on this machine. Use it only on a disposable box without docker |
@@ -128,7 +127,7 @@ each reply's `usage.completion_tokens` as the server reports it (on most servers
 reasoning), for every scored task.
 
 The report's "How much the model writes" card shows per task the typical reply (median) and the whole
-benchmark, as "thinking off → thinking on" or "reference → arm". When the server also reports
+benchmark, and in a comparison "reference → arm". When the server also reports
 `reasoning_tokens` (vLLM with a reasoning parser, radiance, the OpenAI API), it shows the thinking share
 too. Each task's end logs the mean and median, and `compare` prints the change under each task:
 
@@ -209,8 +208,23 @@ file's sha256 is recorded in the output. The reference must be a run's own resul
 comparison file as reference (`compare: <path> is a comparison; pass the reference run's own results file`),
 because a comparison's `.qb` folder is not the reference run's data.
 
-Both runs must use the same tier and tokenizer. Compare refuses logprobs scored on different eval sets, and
-it skips any task whose two runs answered different items.
+`run` writes only its own results; every comparison is a `compare` of two finished runs. Thinking off
+vs on of the same model is two runs and a compare:
+
+```bash
+qualitybench run --endpoint $URL --model my-model --thinking off --out results/off.json
+qualitybench run --endpoint $URL --model my-model --thinking on --out results/on.json
+qualitybench compare results/off.json results/on.json    # writes on-vs-off.json and .html
+```
+
+The thinking-on run is the arm, labelled `my-model, thinking on`, with a paired accuracy change per task and
+the change in output tokens (the threshold verdicts are quantization bars, so they say little here). Two
+models work the same way: run each with the same `--tasks`, tier and thinking setting, then
+`qualitybench compare results/model-a.json results/model-b.json`.
+
+Both runs must use the same tier. Compare skips logprobs scored on different eval sets (another tokenizer
+or `--eval-set`, so two models with different tokenizers compare on task scores only), and it skips any task
+whose two runs answered different items.
 
 ### MMLU-Pro scores from 0.3.0 and earlier
 

@@ -43,19 +43,12 @@ def parse_thresholds(path: str | Path) -> list[dict]:
     return rows[:24]
 
 
-def task_rows(side: Path, on_side: Path | None = None, on_src: str | None = None) -> list[dict]:
+def task_rows(side: Path) -> list[dict]:
     rows = []
     for t in SCORED:
         R = items.load(side / "items" / f"{t}.jsonl")
-        if R is None:
-            continue
-        row = {"id": t, "label": BY_ID[t].label, "how": BY_ID[t].how, "off": stats.score(R)}
-        if on_side is not None:
-            T = items.load(on_side / "items" / f"{t}.jsonl")
-            if T is not None and T.keys() == R.keys():
-                row["on"] = stats.score(T, on_src)
-                row["paired"] = stats.paired(R, T)
-        rows.append(row)
+        if R is not None:
+            rows.append({"id": t, "label": BY_ID[t].label, "how": BY_ID[t].how, "off": stats.score(R)})
     return rows
 
 
@@ -77,16 +70,12 @@ def side_tokens(side: Path) -> dict:
     return out
 
 
-def report_tokens(doc: dict, side: Path, on_side: Path | None = None, arm_side: Path | None = None) -> dict:
+def report_tokens(doc: dict, side: Path, arm_side: Path | None = None) -> dict:
     """The HTML report's output tokens table (side_tokens per run), which the schema-locked document has no room for.
 
-    The reference's; the thinking-on run's where its scores pair with the reference's; the compared arm's on its
-    compared tasks.
+    The run's (the reference's in a comparison); the compared arm's on its compared tasks.
     """
     out = {"ref": side_tokens(side)}
-    if on_side is not None:
-        paired = {r["id"] for r in doc["tasks"] if "on" in r}
-        out["on"] = {t: s for t, s in side_tokens(on_side).items() if t in paired}
     if arm_side is not None:
         done = doc["arms"][doc["gate_arm"]].get("tasks") or {}
         out["arms"] = {doc["gate_arm"]: {t: s for t, s in side_tokens(arm_side).items() if t in done}}
@@ -128,16 +117,13 @@ def scrub(doc: dict) -> list[str]:
     return changed
 
 
-def build(side: Path, *, title: str | None = None, thresholds: str | None = None, notes: list[str] | None = None,
-          on_side: Path | None = None, on_src: str | None = None) -> dict:
+def build(side: Path, *, title: str | None = None, thresholds: str | None = None, notes: list[str] | None = None) -> dict:
     env_raw = json.loads((side / "ENV.json").read_text())
     state = json.loads((side / "state.json").read_text()) if (side / "state.json").is_file() else {}
     quick = bool(state.get("quick"))
     model = env_raw["model"]
-    for sd in (side, on_side):
-        if sd is not None:
-            items.regrade_gsm8k(sd)
-    tasks = task_rows(side, on_side, on_src)
+    items.regrade_gsm8k(side)
+    tasks = task_rows(side)
     env = {k: env_raw[k] for k in ENV_KEYS if env_raw.get(k) is not None}
     caveats = []
     for n in notes or []:
@@ -158,8 +144,8 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
                            "Compare it with runs that used the same params.")[:600])
     if env_raw.get("thinking") == "on":
         caveats.insert(0, "This run had thinking ON (max_tokens at least "
-                          f"{env_raw.get('thinking_on_min_max_tokens')}); its scores sit in the thinking-off slot "
-                          "because it has no thinking-off run to pair with.")
+                          f"{env_raw.get('thinking_on_min_max_tokens')}): these are its scores with thinking on. "
+                          "`qualitybench compare` against a thinking-off run shows what thinking changes.")
     caps = state.get("caps", {})
     cap_notes = []
     for t in SCORED:
@@ -195,16 +181,8 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
     caveats[:0] = cap_notes
     mm = lambda s: f"{s['mean']:,} ({s['median']:,})"
     per = lambda s: mm(s) + (f", thinking {mm(s['thinking'])}" if "thinking" in s else "")
-    off, on = side_tokens(side), side_tokens(on_side) if on_side is not None else {}
-    tok = []
-    for r in tasks:
-        t = r["id"]
-        if on_side is None:
-            got = [per(off[t])] if t in off else []
-        else:  # the thinking-on run's counts where its scores are paired with this run's
-            got = ([f"off {per(off[t])}"] if t in off else []) + ([f"on {per(on[t])}"] if t in on and "on" in r else [])
-        if got:
-            tok.append(f"{r['label']} {', '.join(got)}")
+    counted = side_tokens(side)
+    tok = [f"{r['label']} {per(counted[r['id']])}" for r in tasks if r["id"] in counted]
     if tok:
         caveats.insert(notes_at(caveats), (TOKENS_NOTE + " · ".join(tok))[:600])
     if "gsm8k" in ran:
@@ -243,8 +221,6 @@ def build(side: Path, *, title: str | None = None, thresholds: str | None = None
         doc["thresholds"] = parse_thresholds(thresholds)
         hashes["THRESHOLDS.md"] = file_hash(thresholds)
     doc["hashes"] = hashes
-    if on_src:
-        doc["think_dirs"] = [on_src[:80]]
     doc["partials"] = [p[:200] for p in state.get("partials", {}).values()][:32]
     doc["caveats"] = caveats[:12]
     return doc

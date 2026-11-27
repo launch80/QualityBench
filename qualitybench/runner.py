@@ -11,7 +11,7 @@ from pathlib import Path
 
 import sys
 
-from . import __version__, compare, envs, items, report, results, stats
+from . import __version__, envs, items, report, results, stats
 from . import estimate as qest
 from . import http as qhttp
 from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidecar_for
@@ -112,8 +112,6 @@ def run(a) -> int:
     out = Path(a.out).absolute()
     if not out.name.endswith(".json"):
         raise SystemExit("--out must name a .json results file")
-    if a.reference:  # before any work, not after the run
-        compare.refuse_comparison(Path(a.reference), json.loads(Path(a.reference).read_text()))
     tasks = parse_tasks(a.tasks)
     deadline = parse_deadline(a.deadline)
     side = sidecar_for(out)
@@ -218,29 +216,8 @@ def run(a) -> int:
 
     if not (side / "ENV.json").is_file():
         return 1
-    if a.reference:
-        own = side / "run.json"
-        doc = results.build(side, title=a.title, thresholds=a.thresholds, notes=a.note)
-        _write(ctx, doc, own)
-        ref = json.loads(Path(a.reference).read_text())
-        ref_side = sidecar_for(Path(a.reference))
-        if ref["model"] == a.model and a.thinking == "on" and not ref.get("env", {}).get("thinking_on_min_max_tokens"):
-            # Same model, thinking on vs the reference's thinking off: pair them task by task.
-            doc = results.build(ref_side, title=ref.get("title"), thresholds=a.thresholds, notes=a.note,
-                                on_side=side, on_src=out.stem)
-            doc["env"] = ref.get("env", doc["env"])
-            tokens = results.report_tokens(doc, ref_side, on_side=side)
-        else:
-            doc, warn = compare.build(Path(a.reference), own, a.thresholds, a.arm, a.arm_label, ref_side=ref_side,
-                                      test_side=side)
-            for w in warn:
-                log_to(ctx, "compare: " + w)
-            for line in compare.summary_lines(doc, doc["gate_arm"], ref_side, side):
-                log_to(ctx, line)
-            tokens = results.report_tokens(doc, ref_side, arm_side=side)
-    else:
-        doc = results.build(side, title=a.title, thresholds=a.thresholds, notes=a.note)
-        tokens = results.report_tokens(doc, side)
+    doc = results.build(side, title=a.title, thresholds=a.thresholds, notes=a.note)
+    tokens = results.report_tokens(doc, side)
     _write(ctx, doc, out, tokens)
     for p in results.validate_shape(doc):
         log_to(ctx, f"note: launch80 will not accept this file yet: {p}")
@@ -278,7 +255,7 @@ def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
                     "--thinking off was set; the server may not honour enable_thinking")
 
 
-def _write(ctx: Ctx, doc: dict, out: Path, tokens: dict | None = None) -> None:
+def _write(ctx: Ctx, doc: dict, out: Path, tokens: dict) -> None:
     for w in results.write(doc, out):
         log_to(ctx, "results: " + w)
     html = report.write(doc, out, tokens=tokens)

@@ -14,7 +14,7 @@ Status: implemented by QualityBench 0.1.0. L80 pins a release commit in its tool
 qualitybench --version                       prints a bare version, e.g. 0.1.0
 qualitybench run --endpoint URL --model ID --out PATH
     [--quick] [--tasks a,b,c] [--thinking on|off]
-    [--reference REF.json] [--thresholds T.md] [--deadline T]
+    [--thresholds T.md] [--deadline T]
     [--note KEY=VALUE]...  [extra flags passed through]
 qualitybench compare REF.json TEST.json [--thresholds T.md] [--out PATH]
 qualitybench setup [--tasks a,b,c] [--sandbox docker|native]
@@ -22,14 +22,18 @@ qualitybench tasks [--json]
 ```
 
 Flags L80 does not send by name, but may pass through: `--title`, `--concurrency N`
-(default 16), `--sandbox docker|native`, `--tokenizer`, `--eval-set`, `--arm`,
-`--arm-label`, `--thinking-max-tokens`, `--request-param KEY=VALUE` (repeatable).
+(default 16), `--sandbox docker|native`, `--tokenizer`, `--eval-set`,
+`--thinking-max-tokens`, `--request-param KEY=VALUE` (repeatable).
 
-- `--reference REF.json`: when the reference is the same model with thinking off
-  and this run has `--thinking on`, the two are paired task by task (`on`/`paired`).
-  Otherwise this run becomes an arm of the reference's document. Either way `--out`
-  holds the combined document and this run's own results go to `<name>.qb/run.json`.
-  The reference's `<ref>.qb/` folder must sit next to it.
+- Contract change (Unreleased): `run` no longer takes `--reference`, `--arm` or
+  `--arm-label` (exit 2 if sent); L80 must stop sending them and run `compare REF.json TEST.json`
+  (which keeps its own `--arm`/`--arm-label`) to compare two runs, thinking off vs on included.
+- `run` writes only its own results to `--out`. A `--thinking on` run's scores sit in the
+  per-task `off` slot, the schema's only per-run slot, with a caveat saying they are its
+  thinking-on scores.
+- Documents made by `run --reference` before this change still render (`qualitybench report`
+  and the page): a thinking pair carries `on`/`paired` per task and `think_dirs`, a run-time
+  comparison carries `arms`. `compare` refuses either as the reference (exit 2).
 - `--note precision=…`, `engine=…` and `gpu=…` fill `env`; other notes become caveats.
 - `--request-param KEY=VALUE` adds a field to every `/chat/completions` request
   (dotted keys nest; values parse as JSON when they can). Sampling, token-limit and

@@ -148,14 +148,26 @@ def refuse_comparison(path: Path, doc: dict) -> None:
         raise SystemExit(2)
 
 
+def _env(side: Path) -> dict:
+    try:
+        return json.loads((side / "ENV.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def thinking_suffixes(ref_side: Path, test_side: Path) -> tuple[str, str]:
+    """What follows each run's model id in the comparison's names: its thinking setting when the two differ
+    (thinking off vs on of one model would otherwise read "m vs m"), else nothing."""
+    rt, tt = (_env(s).get("thinking") or "server default" for s in (ref_side, test_side))
+    if rt == tt:
+        return "", ""
+    say = lambda t: f", thinking {t}" if t in ("on", "off") else ", default thinking"
+    return say(rt), say(tt)
+
+
 def params_warning(ref_side: Path, test_side: Path) -> list[str]:
     """The task deltas mean little when the runs sent different --request-param (e.g. reasoning_effort)."""
-    def params(side):
-        try:
-            return json.loads((side / "ENV.json").read_text()).get("request_params") or {}
-        except (OSError, ValueError):
-            return {}
-    r, t = params(ref_side), params(test_side)
+    r, t = (_env(s).get("request_params") or {} for s in (ref_side, test_side))
     if r == t:
         return []
     return [f"the runs sent different request params (reference: {describe(r) or 'none'}; test: {describe(t) or 'none'}), "
@@ -190,17 +202,20 @@ def verdicts(arm: dict, gates: dict, ref_tasks: list[dict], ppl_code_pct: float 
 
 
 def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: str | None = None,
-          label: str | None = None, ref_side: Path | None = None, test_side: Path | None = None) -> tuple[dict, list[str]]:
+          label: str | None = None) -> tuple[dict, list[str]]:
     ref = json.loads(Path(ref_json).read_text())
     test = json.loads(Path(test_json).read_text())
-    rs, ts = ref_side or sidecar_for(Path(ref_json)), test_side or sidecar_for(Path(test_json))
+    rs, ts = sidecar_for(Path(ref_json)), sidecar_for(Path(test_json))
     warn = []
     refuse_comparison(ref_json, ref)
     for name, s in (("reference", rs), ("test", ts)):
         if not (s / "ENV.json").is_file():  # a comparison's own sidecar holds only the report's tokens.json
             raise SystemExit(f"compare: the {name} run's per-item data ({s}) is missing; it is written next to the "
                              "results file by `qualitybench run` and must be kept with it")
-    arm, w = arm_block(rs, ts, test, label, [])
+    rsuf, tsuf = thinking_suffixes(rs, ts)
+    ref_name, test_name = ref["model"] + rsuf, test["model"] + tsuf
+    # the label's 60 characters: a long model id gives way, its thinking setting stays
+    arm, w = arm_block(rs, ts, test, label or test["model"][:60 - len(tsuf)] + tsuf, [])
     tok, tw = arm_tokens(rs, ts, arm.get("tasks", {}))
     warn += w + tw
     warn += params_warning(rs, ts)
@@ -220,8 +235,8 @@ def build(ref_json: Path, test_json: Path, thresholds: str | None = None, key: s
             r["results"] = {key: v[r["id"]]}
     doc["thresholds"] = rows
     doc.setdefault("hashes", {})["THRESHOLDS.md"] = file_hash(tpath)
-    doc["title"] = f"{ref['model']} vs {test['model']}"[:160]
-    doc["arms_note"] = (f"Arm {key}: {test['model']} scored against the reference {ref['model']} on the same items and "
+    doc["title"] = f"{ref_name} vs {test_name}"[:160]
+    doc["arms_note"] = (f"Arm {key}: {test_name} scored against the reference {ref_name} on the same items and "
                         "the same token windows.")[:600]
     if tok:
         note = (f"{arm['label']} vs reference, output tokens per reply (mean, median): "
