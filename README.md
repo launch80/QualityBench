@@ -268,25 +268,6 @@ uv venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 The tests use no network and no GPU. A fake OpenAI server covers the run loop, the proxy and cancellation,
 and the study's per-item files are the regression fixtures.
 
-### Adding a task
-
-1. Add a module named after the task's id to `qualitybench/suite/`, and the task's row to the suite table in
-   `docs/contract.md` and to `test_suite_matches_l80_table`. It is found automatically; `order` sets its place, and
-   two modules with the same id or order fail at import. Keep `default=False` until L80's `suite.go` carries it.
-2. Define `TASK = Task(...)` (fields: `qualitybench/taskdef.py`). Required: `id`, `label`, `items`, `how`, `order`,
-   `run`, `ref_minutes`: a full run's minutes on the reference run (`estimate.REF_RUN`, thinking off), a guess for a
-   new task (like mrcr's) until the model has run it. `about`, shown by the report and `qualitybench tasks`, tells
-   a newcomer what it measures: at most 240 ASCII characters, ending in a period (`test_every_task_is_explained`).
-3. Define `run(ctx, client)` to do the work, usually through an engine in `qualitybench/tasks/` (lm-eval, evalplus,
-   BFCL, LiveCodeBench, native). Import qualitybench modules inside `run`, not at the top: they import the suite.
-   `client.chat(ctx.model, messages, max_tokens=...)` asks the server and returns its response as a dict. A task
-   with fixed inputs to fetch or build defines `prepare(ctx)`, run before the run starts; a TaskFailed from it skips
-   the task with its reason.
-4. A task scored right/wrong per item sets `scored=True` and writes `<name>.qb/items/<id>.jsonl` with
-   `items.write(ctx.items_path(TASK.id), [{"id": ..., "correct": ...}, ...])`, which alone gives it its results row,
-   compare's paired statistics and the report's chart. A score that is not right/wrong (like mrcr's match ratio) also
-   needs its own results block, schema entry, compare block and report section.
-
 ## License
 
 Apache-2.0. The pinned harnesses (lm-eval, evalplus, BFCL, LiveCodeBench) and datasets keep their own licenses.
