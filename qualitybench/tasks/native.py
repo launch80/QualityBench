@@ -16,7 +16,7 @@ from .. import envs
 from .. import http as qhttp
 from ..context import Ctx, TaskFailed, log_to
 from ..progress import emit
-from ..suite import quick_pick
+from ..taskdef import quick_pick
 
 TOPK = 64
 SETS = ("ppl-wiki", "ppl-code", "kld")

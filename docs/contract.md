@@ -110,6 +110,7 @@ not part of the results file.
 | mbpp | 378 | yes |
 | bfcl | 400 (4 categories) | yes |
 | lcb | 175 (v6 slice) | yes |
+| arc_agi_2 | 167 (120 public evaluation tasks) | no, only when named |
 | logprobs | 592 windows × 2048 | yes |
 | needle | 20 (32k and 128k × 10 depths) | yes |
 | spec_parity | 32 | no, only when named |
@@ -122,6 +123,14 @@ stays opt-in until `suite.go` and the server schema
 (`bench-qualitybench-v1.ts`) carry it and its `mrcr` results block; a file
 with that block must be accepted (or the block dropped) before the task can
 become a default.
+
+`arc_agi_2` is opt-in as well. Its first run downloads ARC-AGI-2
+(arcprize/ARC-AGI-2) at a pinned commit; without it the run skips the task
+before the first request, with the reason in `partials`. It makes one
+attempt per test grid and scores each grid right or wrong. ARC Prize
+averages per task with two attempts on its semi-private set, so its
+leaderboard numbers are not directly comparable. Replies are long and
+capped by `--thinking-max-tokens`, with thinking on or off.
 
 ## Behaviour L80 relies on
 
