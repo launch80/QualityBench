@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The MRCR match is on the page again.** A merge in 0.4.x lost the report's "MRCR 8-needle match" tile, so the
+  number was only in the MRCR section's table view; the tile is back, and "What the benchmarks measure" lists MRCR.
 - **Removed: `run --reference`, and run's `--arm` and `--arm-label`.** `run` now writes only its own results
   to `--out` (no more `<name>.qb/run.json`). To compare two runs, run both, then
   `qualitybench compare REF.json TEST.json` (it keeps `--arm`, `--arm-label` and `--thresholds`). Thinking off

@@ -72,6 +72,8 @@ function header() {
   if (LP["ppl-wiki"]) tiles.push([fmt(LP["ppl-wiki"].ppl, 3), "perplexity, wikitext-2", `${LP["ppl-wiki"].windows} × ${LP["ppl-wiki"].window_tokens || LP["ppl-wiki"].positions + 1} tokens`, "logprobs"]);
   if (LP["ppl-code"]) tiles.push([fmt(LP["ppl-code"].ppl, 3), "perplexity, code", `${LP["ppl-code"].windows} × ${LP["ppl-code"].window_tokens || LP["ppl-code"].positions + 1} tokens`, "logprobs"]);
   if (nd.length) tiles.push([`${nd.filter(x => x.correct).length}/${nd.length}`, "needle retrievals", [...new Set(nd.map(x => x.length / 1024 + "k"))].join(" and ") + " context", "needle"]);
+  const mr = D.mrcr ? D.mrcr.items : [];
+  if (mr.length) tiles.push([fmt(100 * mr.reduce((a, x) => a + x.ratio, 0) / mr.length, 1) + "%", "MRCR 8-needle match", `${mr.length} conversations, ${[...new Set(mr.map(x => x.length / 1024 + "k"))].join(" and ")} context`, "mrcr"]);
   if (LP.kld) tiles.push([fmt(100 * LP.kld.mass_mean, 1) + "%", `probability in top-${(D.eval_meta || {}).topk || 64}`, `KLD set mean; 1st pct ${fmt(100 * LP.kld.mass_p01, 1)}%`, "logprobs"]);
   for (const [k, a] of ARMS) if (a.kld) tiles.push([fmt(a.kld.mean, 4), `mean KLD, ${a.label}`, a.top1 ? `top-1 agreement ${fmt(a.top1.agree, 2)}%` : "nats", "logprobs"]);
   $("#tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="v">${esc(t[0])}</div><div class="l">${esc(t[1])}</div><div class="n">${esc(t[2])}</div></div>`).join("");
@@ -116,6 +118,7 @@ function aboutList() {
   const ids = D.tasks.map(t => t.id);
   if (Object.keys(LP).length) ids.push("logprobs");
   if ((D.needle || {}).items && D.needle.items.length) ids.push("needle");
+  if ((D.mrcr || {}).items && D.mrcr.items.length) ids.push("mrcr");
   if (ARMS.some(([, a]) => a.spec_parity)) ids.push("spec_parity");
   const rows = ids.filter(id => about(id)).map(id => [esc(ABOUT[id].label), esc(about(id))]);
   if (!rows.length) { hide("#about-tasks-d"); return; }

@@ -851,7 +851,8 @@ def _page(tmp_path, doc):
     script = html.split("<script>\n", 1)[1].rsplit("\n</script>", 1)[0]
     f = tmp_path / "page.js"
     f.write_text(PAGE_STUB + script + '\nconsole.log(JSON.stringify({tiles: els["#tiles"].innerHTML, '
-                 'think: els["#tasks-think"] ? els["#tasks-think"].textContent : null}));\n')
+                 'think: els["#tasks-think"] ? els["#tasks-think"].textContent : null, '
+                 'about: els["#about-tasks"] ? els["#about-tasks"].innerHTML : null}));\n')
     out = subprocess.run(["node", str(f)], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1]), html
@@ -870,6 +871,20 @@ def _page_doc(min_tokens, on=False, arms=False):
                                                          {"n": 2, "delta": 0.0, "ci": [0.0, 0.0], "ref_only": 0, "test_only": 0, "p": 1.0}}}},
                    gate_arm="q4")
     return doc
+
+
+def test_page_shows_the_mrcr_match_and_lists_mrcr(tmp_path):
+    # MRCR is a match ratio, not right/wrong, so it has no task row: its tile carries the number
+    doc = _page_doc(0)
+    doc["mrcr"] = {"model": "m", "n_needles": 8, "summary": {}, "items": [
+        {"id": "a", "length": 65536, "ratio": 1.0}, {"id": "b", "length": 65536, "ratio": 0.5},
+        {"id": "c", "length": 131072, "ratio": 0.75}, {"id": "d", "length": 131072, "ratio": 0.25}]}
+    page, _ = _page(tmp_path, doc)
+    assert ('<div class="v">62.5%</div><div class="l">MRCR 8-needle match</div>'
+            '<div class="n">4 conversations, 64k and 128k context</div>') in page["tiles"]
+    assert "MRCR 8-needle" in page["about"]  # "What the benchmarks measure" lists it too
+    plain, _ = _page(tmp_path, _page_doc(0))  # no MRCR block: no tile, not listed
+    assert "MRCR" not in plain["tiles"] and "MRCR" not in (plain["about"] or "")
 
 
 def test_page_says_thinking_off_is_the_reference_only_on_a_thinking_pair(tmp_path):
