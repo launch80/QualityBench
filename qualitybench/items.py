@@ -8,9 +8,7 @@ import os
 import re
 from pathlib import Path
 
-LMEVAL_PICK = {"gsm8k": ("flexible-extract", "exact_match"), "ifeval": ("none", "prompt_level_strict_acc"),
-               "mmlu_pro": ("custom-extract", "exact_match")}
-
+from .suite import BY_ID
 
 GSM8K_GRADER = "qb-gsm8k-1"
 _NUM = r"-?\$*\s?\d[\d,]*(?:\.\d+)?"
@@ -88,7 +86,7 @@ def mmlu_pro_correct(d: dict) -> bool:
 
 
 def from_lmeval(samples: Path, task: str) -> list[dict]:
-    flt, metric = LMEVAL_PICK["mmlu_pro" if task.startswith("mmlu_pro") else task]
+    flt, metric = BY_ID["mmlu_pro" if task.startswith("mmlu_pro") else task].lmeval_pick
     out = []
     for line in open(samples):
         d = json.loads(line)

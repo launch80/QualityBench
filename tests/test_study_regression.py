@@ -15,6 +15,8 @@ def study_tasks():
     rows = []
     for t in SCORED:
         R = items.load(FIX / "bf16" / f"{t}.jsonl")
+        if R is None:
+            continue  # a task the study did not run
         row = {"id": t, "label": BY_ID[t].label, "how": BY_ID[t].how, "off": stats.score(R)}
         T, src = None, None
         for d in ("bf16-think", "bf16-think2"):

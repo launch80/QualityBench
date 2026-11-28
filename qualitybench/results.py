@@ -270,5 +270,7 @@ def validate_shape(doc: dict) -> list[str]:
     """
     probs = []
     if not doc.get("tasks"):
-        probs.append("no scored task (launch80 needs at least one of gsm8k, ifeval, mmlu_pro, humaneval, mbpp, bfcl, lcb)")
+        # launch80's suite.go carries the default tasks; an opt-in one may not be there yet
+        ids = ", ".join(t for t in SCORED if BY_ID[t].default)
+        probs.append(f"no scored task (launch80 needs at least one of {ids})")
     return probs

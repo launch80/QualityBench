@@ -28,31 +28,10 @@ from .suite import BY_ID
 #: The run the reference table was measured on.
 REF_RUN = "Qwopus3.8-27B INT4 on one Arc Pro B65, vLLM 0.30, thinking off (2026-11-02)"
 
-#: Full-run minutes per task on the reference run (thinking off). L80 keeps the same table
-#: (internal/qualitybench/suite.go RefMinutes) for when this tool can't be asked.
-REF_MINUTES = {"gsm8k": 19, "ifeval": 9, "mmlu_pro": 42, "humaneval": 22, "mbpp": 32, "bfcl": 4, "lcb": 17,
-               "logprobs": 16, "needle": 6, "spec_parity": 2,
-               # mrcr was not part of the reference run: 14.3M prompt tokens at its 1280 tok/s prefill is about
-               # 3h05, plus the replies. A guess until a run of this model is in the history.
-               "mrcr": 200}
-
 #: The probe on the reference run's server (output tokens/s across 16 parallel chats; prompt tokens/s
 #: for one long prompt): the same model and box, measured three times on 2026-11-06 (229–235, 1267–1290).
 REF_DECODE_TPS = 232.0
 REF_PREFILL_TPS = 1280.0
-
-#: Seconds per task that don't scale with the server: harness start, scoring, sandboxes. From quick
-#: runs where almost all the time was this: a 0.6B model on this machine (gsm8k 18 s, ifeval 22 s,
-#: mmlu_pro 28 s, bfcl 7 s) and a 1.7B on a rented 3090 through a tunnel (about 1.5-3x those).
-OVERHEAD_S = {"gsm8k": 15, "ifeval": 18, "mmlu_pro": 25, "humaneval": 25, "mbpp": 30, "bfcl": 5, "lcb": 35,
-              "logprobs": 10, "needle": 10, "spec_parity": 5, "mrcr": 15}
-
-#: Seconds per item no server goes below. A logprobs window returns 2048 × 64 logprobs (about 0.7 MB
-#: of JSON), so over a tunnel it is bound by the network: 3.6 s a window on that quick run.
-FLOOR_S = {"logprobs": 1.5}
-
-#: Tasks bound by prompt processing rather than by generated text.
-PREFILL_TASKS = {"logprobs", "needle", "mrcr"}
 
 #: Thinking on writes several times the text. A guess until a thinking-on run is in the history.
 THINK_FACTOR = 4.0
@@ -108,10 +87,10 @@ def _from_history(task: str, items: int, hist: list[dict], probe: dict | None) -
         t = (r.get("tasks") or {}).get(task)
         if not t or not t.get("items") or not t.get("wall_s"):
             continue
-        ov = OVERHEAD_S.get(task, 0)
+        ov = BY_ID[task].overhead_s
         scal = max(0.0, t["wall_s"] - ov) * items / t["items"]
         then = r.get("probe") or {}
-        key = "prefill_tps" if task in PREFILL_TASKS else "decode_tps"
+        key = "prefill_tps" if BY_ID[task].prefill else "decode_tps"
         if probe and then.get(key) and probe.get(key):
             scal *= then[key] / probe[key]
         return (ov + scal) / 60
@@ -208,16 +187,16 @@ def probe(client: qhttp.Client, model: str, concurrency: int = 16, max_tokens: i
 def setup_minutes(tasks: list[str], sandbox: str) -> float:
     """Rough one-time install time for what these tasks still need (0 once set up)."""
     m = 0.0
-    lm = set(tasks) & {"gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "logprobs", "needle", "mrcr"}
-    if lm and not _stamped("lmeval"):
+    need = {n for t in tasks for n in BY_ID[t].needs}
+    if "lmeval" in need and not _stamped("lmeval"):
         m += 4
-    if "mrcr" in tasks and not envs.mrcr_inputs().is_file():
+    if "mrcr_inputs" in need and not envs.mrcr_inputs().is_file():
         m += 3  # about 460 MB of parquet to fetch and extract
-    if "bfcl" in tasks and not _stamped("bfcl"):
+    if "bfcl" in need and not _stamped("bfcl"):
         m += 2
-    if set(tasks) & {"humaneval", "mbpp"} and sandbox == "docker" and not _image(envs.EVALPLUS_IMAGE):
+    if "evalplus_image" in need and sandbox == "docker" and not _image(envs.EVALPLUS_IMAGE):
         m += 2
-    if "lcb" in tasks:
+    if "lcb" in need:
         if sandbox == "native":
             m += 0 if _stamped("lcb") else 5
         elif not _image(envs.LCB_IMAGE):
@@ -246,19 +225,20 @@ def estimate(tasks: list[str], quick: bool, thinking: str | None, model: str, pr
         m = _from_history(t, n, hist, probe_result)
         src = "history"
         if m is None:
-            ov = OVERHEAD_S.get(t, 0) / 60
-            scal = max(0.0, REF_MINUTES.get(t, 2) - ov) * n / BY_ID[t].items
+            task = BY_ID[t]
+            ov = task.overhead_s / 60
+            scal = max(0.0, task.ref_minutes - ov) * n / task.items
             if probe_result:
-                if t in PREFILL_TASKS:
+                if task.prefill:
                     scal *= REF_PREFILL_TPS / max(probe_result.get("prefill_tps") or REF_PREFILL_TPS, 1)
                 else:
                     scal *= REF_DECODE_TPS / max(probe_result.get("decode_tps") or REF_DECODE_TPS, 1)
                 src = "probe"
             else:
                 src = "reference"
-            if thinking == "on" and t not in PREFILL_TASKS:
+            if thinking == "on" and not task.prefill:
                 scal *= THINK_FACTOR
-            m = max(ov + scal, n * FLOOR_S.get(t, 0) / 60)
+            m = max(ov + scal, n * task.floor_s / 60)
         sources.add(src)
         rows.append({"id": t, "label": BY_ID[t].label, "min": round(m, 1), "items": n, "source": src})
     worst = "reference" if "reference" in sources else "probe" if "probe" in sources else "history"

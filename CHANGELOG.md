@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Each task is one module (developers).** Everything about a task (its metadata, its estimate, what setup
+  installs for it and how it runs) is declared in one module in `qualitybench/suite/`. Adding a task scored
+  right/wrong per item is one new file plus its rows in the suite table in `docs/contract.md` and in the L80
+  table test. Nothing changes for users.
 - **A prompt the server's content filter refuses is scored wrong instead of killing the task.** Azure's filter
   answers a few MMLU-Pro prompts, and a few IFEval prompts it takes for jailbreaks, with HTTP 400 every time; the
   harness retried each until it gave up and took the whole task down. The proxy now answers such a refusal
@@ -18,8 +22,8 @@
 - **The report explains each benchmark.** Hovering a task name, a bar or a tile says in a sentence or two what the
   benchmark measures and where it comes from (GSM8K, IFEval, MMLU-Pro, HumanEval+, MBPP+, BFCL, LiveCodeBench,
   logprobs, needle, spec parity), and a "What the benchmarks measure" list under the task chart collects them.
-  The text lives with the suite in `suite.py`; `qualitybench tasks` prints it, and `tasks --json` carries it as
-  `about`.
+  The text lives with each task in `qualitybench/suite/` (one module per task); `qualitybench tasks` prints it,
+  and `tasks --json` carries it as `about`.
 - **The mean-accuracy tile shows both means of a paired report.** It averaged only the thinking-off scores,
   so a run paired with a no-thinking reference read as the reference's number (78.9% instead of its own
   88.9% on one run). It now reads "78.9% / 88.9%" over "thinking off / thinking on". Single runs are unchanged.

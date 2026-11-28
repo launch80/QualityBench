@@ -14,7 +14,8 @@ from pathlib import Path
 from .. import envs, items
 from ..context import Ctx, TaskFailed, log_to
 from ..progress import emit
-from ..suite import BY_ID, quick_pick
+from ..suite import BY_ID
+from ..taskdef import quick_pick
 
 # ------------------------------------------------------------------ lm-eval: gsm8k, ifeval, mmlu_pro
 

@@ -1,5 +1,5 @@
 const D = /*__DATA__*/null;
-const ABOUT = /*__ABOUT__*/{};  // task id -> {label, about}: what each benchmark measures, from suite.py
+const ABOUT = /*__ABOUT__*/{};  // task id -> {label, about}: what each benchmark measures, from qualitybench/suite/
 const about = id => (ABOUT[id] || {}).about || "";
 const hint = id => about(id) ? `<span class="hint">${esc(about(id))}</span>` : "";
 const T = /*__TOKENS__*/null;

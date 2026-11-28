@@ -18,24 +18,20 @@ from .context import Ctx, DeadlineHit, TaskFailed, log_to, parse_deadline, sidec
 from .progress import Tracker, emit, emit_line, track_run
 from .proxy import Proxy, describe, parse_params
 from .suite import BY_ID, SCORED, parse_tasks, run_order
-from .tasks import harness, native
-
-
-#: Tasks whose fixed inputs must be built from a readable tokenizer before any of them can run.
-INPUT_TASKS = {"logprobs": "evalset", "needle": "needle"}
+from .tasks import harness
 
 
 def precheck_inputs(ctx: Ctx, todo: list[str]) -> list[str]:
-    """Build the tokenizing tasks' fixed inputs up front; one that cannot be built (e.g. no readable tokenizer)
-    is skipped with its reason instead of failing hours into the run."""
+    """Run each task's prepare up front, which fetches or builds its fixed inputs; a task whose inputs cannot be
+    had (e.g. no readable tokenizer) is skipped with its reason instead of failing hours into the run."""
     keep = []
     for t in todo:
-        what = INPUT_TASKS.get(t)
-        if not what:
+        prepare = BY_ID[t].prepare
+        if not prepare:
             keep.append(t)
             continue
         try:
-            native.ensure_inputs(ctx, what)
+            prepare(ctx)
             keep.append(t)
         except TaskFailed as e:
             ctx.mark_partial(t, f"{t}: skipped before running ({str(e)[:150]})")
@@ -69,15 +65,12 @@ def preflight(ctx: Ctx, client: qhttp.Client) -> None:
                          "(vLLM --reasoning-parser) and a chat template that honours enable_thinking")
 
 
-OUTPUTS = {"logprobs": "logprobs.npz", "needle": "needle.json", "spec_parity": "parity.json", "mrcr": "mrcr.json"}
-
-
 def finished(ctx: Ctx, task: str) -> bool:
     if task in ctx.state["partials"]:
         return False
     if task in SCORED:
         return items_ok(ctx, task)
-    return (ctx.side / OUTPUTS[task]).is_file()
+    return (ctx.side / BY_ID[task].output).is_file()
 
 
 def items_ok(ctx: Ctx, task: str) -> bool:
@@ -86,22 +79,7 @@ def items_ok(ctx: Ctx, task: str) -> bool:
 
 
 def run_task(ctx: Ctx, task: str, client: qhttp.Client) -> None:
-    if task in ("gsm8k", "ifeval", "mmlu_pro"):
-        harness.run_lmeval(ctx, task)
-    elif task in ("humaneval", "mbpp"):
-        harness.run_evalplus(ctx, task)
-    elif task == "bfcl":
-        harness.run_bfcl(ctx)
-    elif task == "lcb":
-        harness.run_lcb(ctx)
-    elif task == "logprobs":
-        native.run_logprobs(ctx, client)
-    elif task == "needle":
-        native.run_needle(ctx, client)
-    elif task == "mrcr":
-        native.run_mrcr(ctx, client)
-    elif task == "spec_parity":
-        native.run_parity(ctx, client)
+    BY_ID[task].run(ctx, client)
     if task in SCORED:
         it = items.load(ctx.items_path(task))
         emit(task, state="scored", correct=sum(it.values()), total=len(it))
@@ -271,15 +249,12 @@ def run(a) -> int:
     return 1 if failed else 0
 
 
-RESUMABLE = ("gsm8k", "ifeval", "mmlu_pro", "humaneval", "mbpp", "lcb")  # a rerun asks only for the missing items, so counts add up
-
-
 def _record_caps(ctx: Ctx, task: str, st: dict) -> None:
     """Keep how many of a task's replies hit the token cap and their output tokens (state.json); log both."""
     if task not in SCORED or not st["replies"]:
         return
     caps = ctx.state.setdefault("caps", {})
-    old = caps.get(task) if task in RESUMABLE else None
+    old = caps.get(task) if BY_ID[task].resumable else None
     # "thinking" in caps is the run's --thinking; caps kept before thinking counts have none for their tokens
     st = {("thinking_tokens" if k == "thinking" else k): v for k, v in st.items()}
     if old:
