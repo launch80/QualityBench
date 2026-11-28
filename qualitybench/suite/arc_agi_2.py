@@ -266,12 +266,21 @@ def run(ctx, client):
 
 # Opt-in until L80's suite.go carries it. Downloads its data in prepare (stdlib only), so `setup` installs nothing.
 TASK = Task(
-    id="arc_agi_2", label="ARC-AGI-2", items=167, order=78, default=False, cost=70,
+    id="arc_agi_2",
+    label="ARC-AGI-2",
+    items=167,
+    order=78,
+    default=False,
+    cost=70,
     how="120 public evaluation tasks, 167 test grids, ARC Prize's prompt, 1 attempt, exact grid match",
     about="Abstract visual puzzles, easy for people and hard for models: infer the rule from a few example pairs of "
           "colored grids, then produce the test output grid exactly (ARC-AGI-2).",
-    scored=True, resumable=True, overhead_s=10, needs=frozenset(),
+    scored=True,
+    resumable=True,
+    overhead_s=10,
+    needs=frozenset(),
     # A guess until a run of this model is in the history: 167 replies of up to --thinking-max-tokens tokens.
     ref_minutes=40,
-    run=run, prepare=prepare,
+    run=run,
+    prepare=prepare,
 )
